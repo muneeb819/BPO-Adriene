@@ -392,10 +392,13 @@ def debug_voice_status():
         "tts_standby": tts.standby,
         "tts_failover_reason": tts.failover_reason,
         "stt_provider": CONFIG.stt_provider,
-        "voice": CONFIG.elevenlabs_voice if tts.active == "elevenlabs" else CONFIG.kokoro_voice,
+        "voice": (CONFIG.elevenlabs_voice if tts.active == "elevenlabs" 
+                 else CONFIG.kokoro_voice if tts.active == "kokoro"
+                 else f"ChatterBox/{CONFIG.chatterbox_model}" if tts.active == "chatterbox"
+                 else "—"),
         "llm": CONFIG.llm_provider,
         "realtime": bool(
-            tts.active in ("elevenlabs", "kokoro")
+            tts.active in ("elevenlabs", "kokoro", "chatterbox")
             and CONFIG.stt_provider == "deepgram"
             and CONFIG.deepgram_api_key
         ),
