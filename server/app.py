@@ -972,11 +972,11 @@ function playPCM(int16){
     nextPlayTime=start+buf.duration;
     activeSources.push(s);
     s.onended=()=>{activeSources=activeSources.filter(x=>x!==s);};
-    speaking=true; updateMeter(true);
+    speaking=true; updateMeter(true); syncWorkletState();
 }
 function stopPlayback(){
     activeSources.forEach(s=>{try{s.stop()}catch(e){}});
-    activeSources=[]; nextPlayTime=playCtx?playCtx.currentTime:0; speaking=false; updateMeter(false);
+    activeSources=[]; nextPlayTime=playCtx?playCtx.currentTime:0; speaking=false; updateMeter(false); syncWorkletState();
 }
 function updateMeter(on){
     document.getElementById('spkMeter').firstElementChild.style.width=on?'100%':'0%';
@@ -1017,29 +1017,90 @@ async function startMic(){
     if(!stream) throw (err||new Error('Could not open the microphone.'));
     micStream=stream;
 
-    // 3. Capture context at 16 kHz. If the browser ignores it, resample per block.
+    // 3. Capture context at 16 kHz using AudioWorklet (ScriptProcessorNode is deprecated).
+    //    Inline worklet via blob URL — no extra file needed.
     capCtx=new (window.AudioContext||window.webkitAudioContext)({sampleRate:SAMPLE_RATE});
     const ctxRate=capCtx.sampleRate||SAMPLE_RATE;
     source=capCtx.createMediaStreamSource(micStream);
-    processor=capCtx.createScriptProcessor(4096,1,1);
-    source.connect(processor); processor.connect(capCtx.destination);
-    processor.onaudioprocess=(e)=>{
-        let f=e.inputBuffer.getChannelData(0);
-        if(ctxRate!==SAMPLE_RATE) f=resampleLinear(f, ctxRate, SAMPLE_RATE);
-        let sum=0; for(let i=0;i<f.length;i++) sum+=f[i]*f[i];
-        const rms=Math.sqrt(sum/f.length);
-        document.getElementById('micMeter').firstElementChild.style.width=Math.min(100,rms*400)+'%';
-        const pcm=new Int16Array(f.length);
-        for(let i=0;i<f.length;i++){const s=Math.max(-1,Math.min(1,f[i]));pcm[i]=s<0?s*0x8000:s*0x7FFF;}
-        if(ws&&ws.readyState===1) ws.send(pcm.buffer);
-        const now=Date.now();
-        if(speaking && rms>0.02 && now>bargeOk){
-            bargeOk=now+900;
-            if(ws&&ws.readyState===1) ws.send(JSON.stringify({type:'barge'}));
+
+    const workletCode = `
+        class MicProcessor extends AudioWorkletProcessor {
+            constructor() {
+                super();
+                this.targetRate = ${SAMPLE_RATE};
+                this.ctxRate = sampleRate;
+                this.bargeOk = 0;
+                this.speaking = false;
+                this.port.onmessage = (e) => {
+                    if (e.data?.type === 'speaking') this.speaking = e.data.value;
+                    if (e.data?.type === 'bargeOk') this.bargeOk = e.data.value;
+                };
+            }
+            resampleLinear(input, fromRate, toRate) {
+                if (fromRate === toRate) return input;
+                const ratio = fromRate / toRate;
+                const outLen = Math.ceil(input.length / ratio);
+                const out = new Float32Array(outLen);
+                for (let i = 0; i < outLen; i++) {
+                    const srcIdx = i * ratio;
+                    const i0 = Math.floor(srcIdx);
+                    const i1 = Math.min(i0 + 1, input.length - 1);
+                    const frac = srcIdx - i0;
+                    out[i] = input[i0] * (1 - frac) + input[i1] * frac;
+                }
+                return out;
+            }
+            process(inputs, outputs, parameters) {
+                const input = inputs[0];
+                if (!input || !input[0]) return true;
+                const f = input[0];
+                let pcm = this.ctxRate !== this.targetRate ? this.resampleLinear(f, this.ctxRate, this.targetRate) : f;
+                let sum = 0;
+                for (let i = 0; i < pcm.length; i++) sum += pcm[i] * pcm[i];
+                const rms = Math.sqrt(sum / pcm.length);
+                const out16 = new Int16Array(pcm.length);
+                for (let i = 0; i < pcm.length; i++) {
+                    const s = Math.max(-1, Math.min(1, pcm[i]));
+                    out16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+                }
+                this.port.postMessage({ type: 'meter', rms });
+                this.port.postMessage({ type: 'pcm', buffer: out16.buffer }, [out16.buffer]);
+                const now = currentTime * 1000;
+                if (this.speaking && rms > 0.02 && now > this.bargeOk) {
+                    this.bargeOk = now + 900;
+                    this.port.postMessage({ type: 'barge' });
+                }
+                return true;
+            }
+        }
+        registerProcessor('mic-processor', MicProcessor);
+    `;
+    const blob = new Blob([workletCode], { type: 'application/javascript' });
+    const workletUrl = URL.createObjectURL(blob);
+    await capCtx.audioWorklet.addModule(workletUrl);
+
+    processor = new AudioWorkletNode(capCtx, 'mic-processor');
+    source.connect(processor);
+    processor.connect(capCtx.destination);
+
+    processor.port.onmessage = (e) => {
+        const msg = e.data;
+        if (msg.type === 'meter') {
+            document.getElementById('micMeter').firstElementChild.style.width = Math.min(100, msg.rms * 400) + '%';
+        } else if (msg.type === 'pcm') {
+            if (ws && ws.readyState === 1) ws.send(msg.buffer);
+        } else if (msg.type === 'barge') {
+            if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: 'barge' }));
             stopPlayback();
-            bubble('sys','&#9995; <b>You interrupted Lina</b> (barge-in) — she stopped talking and is now listening.');
+            bubble('sys', '&#9995; <b>You interrupted Lina</b> (barge-in) — she stopped talking and is now listening.');
         }
     };
+
+    // Sync speaking/bargeOk state to worklet
+    function syncWorkletState() {
+        processor.port.postMessage({ type: 'speaking', value: speaking });
+        processor.port.postMessage({ type: 'bargeOk', value: bargeOk });
+    }
 }
 
 function startCall(){
@@ -1080,8 +1141,8 @@ function resetBtns(){document.getElementById('startBtn').disabled=false;document
 function handle(m){
     if(m.type==='agent_say'){ bubble('agent','<b>Lina:</b> '+esc(m.text)); dbg.textContent=JSON.stringify(m,null,1); }
     else if(m.type==='audio'){ const i16=base64ToInt16(m.data); if(i16) playPCM(i16); }
-    else if(m.type==='speech_start'){ speaking=true; setState('Lina speaking...'); updateMeter(true); }
-    else if(m.type==='speech_end'){ speaking=false; updateMeter(false); setState('listening'); }
+    else if(m.type==='speech_start'){ speaking=true; setState('Lina speaking...'); updateMeter(true); syncWorkletState(); }
+    else if(m.type==='speech_end'){ speaking=false; updateMeter(false); setState('listening'); syncWorkletState(); }
     else if(m.type==='speech_cancel'){ stopPlayback(); setState('interrupted'); }
     else if(m.type==='listening'){ listening=m.state==='on'; setState(listening?'listening — go ahead':'thinking...'); }
     else if(m.type==='transcript'){
