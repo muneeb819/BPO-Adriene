@@ -1,0 +1,16 @@
+; Sample Asterisk / VICIdial dialplan to route inbound DID calls to the AI fronter.
+; Drop this into /etc/asterisk/extensions.conf (or a VICIdial custom context) and reload.
+
+[fronter-inbound]
+; Inbound DID for final-expense leads
+exten => _X.,1,NoOp(Inbound final expense lead -> AI fronter)
+ same => n,Set(lead_id=${SHELL(printf ${CALLERID(num)})}) ; optional: pass lead id via variable
+ same => n,Stasis(final-expense-fronter,lead_id)
+ same => n,Hangup()
+
+; The fronter, when a lead qualifies, redirects the channel to this context/queue.
+; Make sure a queue or agent extension named 'closers' exists in VICIdial.
+[from-internal]
+exten => closers,1,NoOp(AI fronter transferring qualified lead to closer queue)
+ same => n,Queue(closers)
+ same => n,Hangup()

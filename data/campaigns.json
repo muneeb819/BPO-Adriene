@@ -1,0 +1,335 @@
+{
+  "campaigns": {
+    "medicare": {
+      "id": "medicare",
+      "name": "Medicare Fronter",
+      "description": "Verify current Medicare coverage, then confirm age 45-90.",
+      "agent_name": "Lina",
+      "business_name": "EverTrust",
+      "persona_extra": "",
+      "lines": {
+        "greet": "Hi, this is {name} from {campaign}. How are you today?",
+        "transfer_handoff": "Perfect, one moment and I'll get you connected with our licensed agent.",
+        "busy_close": "No problem. I appreciate your time. Have a great day.",
+        "not_interested_close": "I understand. Thank you for your time. Have a great day.",
+        "hello_checkin": "Hello? Just checking you're still there."
+      },
+      "questions": [
+        {
+          "id": "medicare",
+          "kind": "yes_no",
+          "ask_line": "Do you currently have Medicare?",
+          "routes": {
+            "YES": "next",
+            "NO": "end:AI-NO-MEDICARE",
+            "REFUSE": "end:AI-MEDICARE-REFUSED",
+            "QUESTION": "clarify",
+            "PRIVATE_ONLY": "clarify",
+            "UNSURE": "clarify",
+            "UNCLEAR": "clarify",
+            "DNC": "end:AI-DNC",
+            "BUSY": "end:AI-BUSY"
+          },
+          "lines": {
+            "no": "I understand. Thank you for your time. Have a great day.",
+            "refuse": "I understand. Thank you for your time. Have a great day.",
+            "unsure": "Just to confirm, do you currently have Medicare — yes or no?",
+            "question": "I'm just confirming whether you currently have Medicare coverage. Do you have it — yes or no?",
+            "private": "Do you also currently have Medicare?",
+            "repeat": "I'm sorry, I just need to confirm — do you currently have Medicare, yes or no?"
+          },
+          "max_clarify": 2,
+          "age_min": null,
+          "age_max": null,
+          "pass_keywords": []
+        },
+        {
+          "id": "age",
+          "kind": "age",
+          "ask_line": "How old are you, if you don't mind me asking?",
+          "routes": {
+            "PASS": "transfer",
+            "FAIL": "end:AI-NOT-ELIGIBLE",
+            "UNCLEAR": "clarify",
+            "DNC": "end:AI-DNC",
+            "BUSY": "end:AI-BUSY"
+          },
+          "lines": {
+            "pass": "Thank you. One moment, let me get you connected with our licensed agent.",
+            "fail": "I appreciate your time, but this option is for ages {min_age} to {max_age}. Thank you. Have a great day.",
+            "clarify": "I'm sorry, I didn't catch that. How old are you?"
+          },
+          "max_clarify": 1,
+          "age_min": 45,
+          "age_max": 90,
+          "pass_keywords": []
+        }
+      ],
+      "updated": "2026-10-14T14:55:11.474045+00:00",
+      "disclosure": "Just so you know, this call may be recorded for quality and training purposes.",
+      "use_case_id": "UC-LINA-001",
+      "turn_detection_mode": "transcription_based",
+      "ambient_noise_enabled": false,
+      "interruption_min_words": 2,
+      "call_max_duration": 300,
+      "call_idle_timeout": 10,
+      "dictionary_words": [],
+      "voicemail_settings": {},
+      "widget_config": {},
+      "agent_uuid": ""
+    },
+    "final_expense": {
+      "id": "final_expense",
+      "name": "Final Expense Fronter",
+      "description": "Confirm interest in burial/final-expense coverage, then verify age 50-85.",
+      "agent_name": "Lina",
+      "business_name": "EverTrust",
+      "persona_extra": "",
+      "lines": {
+        "greet": "Hi, this is {name} from {campaign}. How are you today?",
+        "transfer_handoff": "Great, one moment and I'll connect you with a licensed agent who can walk you through the options.",
+        "busy_close": "No problem at all. I appreciate your time. Have a great day.",
+        "not_interested_close": "I understand completely. Thank you for your time. Have a great day.",
+        "hello_checkin": "Hello? Just checking you're still there."
+      },
+      "questions": [
+        {
+          "id": "interest",
+          "kind": "yes_no",
+          "ask_line": "Are you looking to help cover final expenses like a funeral or burial costs?",
+          "routes": {
+            "YES": "next",
+            "NO": "end:AI-NOT-INTERESTED",
+            "REFUSE": "end:AI-REFUSED",
+            "UNSURE": "clarify",
+            "UNCLEAR": "clarify",
+            "DNC": "end:AI-DNC",
+            "BUSY": "end:AI-BUSY"
+          },
+          "lines": {
+            "no": "I understand. Thank you for your time. Have a great day.",
+            "refuse": "I understand. Thank you for your time. Have a great day.",
+            "unsure": "Just to confirm — are you interested in help covering final expenses, yes or no?",
+            "repeat": "I'm sorry, I just need to confirm — are you interested in final expense coverage, yes or no?"
+          },
+          "max_clarify": 2,
+          "age_min": null,
+          "age_max": null,
+          "pass_keywords": []
+        },
+        {
+          "id": "age",
+          "kind": "age",
+          "ask_line": "How old are you, if you don't mind me asking?",
+          "routes": {
+            "PASS": "transfer",
+            "FAIL": "end:AI-NOT-ELIGIBLE",
+            "UNCLEAR": "clarify",
+            "DNC": "end:AI-DNC",
+            "BUSY": "end:AI-BUSY"
+          },
+          "lines": {
+            "pass": "Thank you. One moment, let me connect you with a licensed agent.",
+            "fail": "I appreciate your time, but this option is for ages 50 to 85. Thank you. Have a great day.",
+            "clarify": "I'm sorry, I didn't catch that. How old are you?"
+          },
+          "max_clarify": 1,
+          "age_min": 50,
+          "age_max": 85,
+          "pass_keywords": []
+        }
+      ],
+      "updated": "",
+      "disclosure": "Just so you know, this call may be recorded for quality and training purposes.",
+      "use_case_id": "UC-LINA-002",
+      "turn_detection_mode": "transcription_based",
+      "ambient_noise_enabled": false,
+      "interruption_min_words": 2,
+      "call_max_duration": 300,
+      "call_idle_timeout": 10,
+      "dictionary_words": [],
+      "voicemail_settings": {},
+      "widget_config": {},
+      "agent_uuid": ""
+    },
+    "aca": {
+      "id": "aca",
+      "name": "ACA / Marketplace Fronter",
+      "description": "Find uninsured consumers, then verify age 18-64 for marketplace subsidies.",
+      "agent_name": "Lina",
+      "business_name": "EverTrust",
+      "persona_extra": "",
+      "lines": {
+        "greet": "Hi, this is {name} from {campaign}. How are you today?",
+        "transfer_handoff": "Perfect, one moment and I'll connect you with a licensed agent about marketplace options.",
+        "busy_close": "No problem. I appreciate your time. Have a great day.",
+        "not_interested_close": "I understand. Thank you for your time. Have a great day.",
+        "hello_checkin": "Hello? Just checking you're still there."
+      },
+      "questions": [
+        {
+          "id": "insured",
+          "kind": "yes_no",
+          "ask_line": "Do you currently have health insurance or a marketplace plan?",
+          "routes": {
+            "NO": "next",
+            "YES": "end:AI-HAS-INSURANCE",
+            "REFUSE": "end:AI-REFUSED",
+            "UNSURE": "clarify",
+            "UNCLEAR": "clarify",
+            "DNC": "end:AI-DNC",
+            "BUSY": "end:AI-BUSY"
+          },
+          "lines": {
+            "yes": "Understood — thank you. Have a great day.",
+            "no": "Okay, thank you.",
+            "refuse": "I understand. Thank you for your time. Have a great day.",
+            "unsure": "Just to confirm — do you currently have health insurance, yes or no?",
+            "repeat": "I'm sorry, I just need to confirm — do you have health insurance right now, yes or no?"
+          },
+          "max_clarify": 2,
+          "age_min": null,
+          "age_max": null,
+          "pass_keywords": []
+        },
+        {
+          "id": "age",
+          "kind": "age",
+          "ask_line": "How old are you, if you don't mind me asking?",
+          "routes": {
+            "PASS": "transfer",
+            "FAIL": "end:AI-NOT-ELIGIBLE",
+            "UNCLEAR": "clarify",
+            "DNC": "end:AI-DNC",
+            "BUSY": "end:AI-BUSY"
+          },
+          "lines": {
+            "pass": "Thank you. One moment, let me connect you with a licensed agent.",
+            "fail": "I appreciate your time, but this option is for ages 18 to 64. Thank you. Have a great day.",
+            "clarify": "I'm sorry, I didn't catch that. How old are you?"
+          },
+          "max_clarify": 1,
+          "age_min": 18,
+          "age_max": 64,
+          "pass_keywords": []
+        }
+      ],
+      "updated": "",
+      "disclosure": "Just so you know, this call may be recorded for quality and training purposes.",
+      "use_case_id": "UC-LINA-003",
+      "turn_detection_mode": "transcription_based",
+      "ambient_noise_enabled": false,
+      "interruption_min_words": 2,
+      "call_max_duration": 300,
+      "call_idle_timeout": 10,
+      "dictionary_words": [],
+      "voicemail_settings": {},
+      "widget_config": {},
+      "agent_uuid": ""
+    },
+    "hi": {
+      "id": "hi",
+      "name": "Hospital Indemnity Fronter",
+      "description": "Verify age 50-85, then screen for recent hospital stays.",
+      "agent_name": "Lina",
+      "business_name": "EverTrust",
+      "persona_extra": "",
+      "lines": {
+        "greet": "Hi, this is {name} from {campaign}. How are you today?",
+        "transfer_handoff": "Great, one moment and I'll connect you with a licensed agent about hospital cash benefits.",
+        "busy_close": "No problem. I appreciate your time. Have a great day.",
+        "not_interested_close": "I understand. Thank you for your time. Have a great day.",
+        "hello_checkin": "Hello? Just checking you're still there."
+      },
+      "questions": [
+        {
+          "id": "age",
+          "kind": "age",
+          "ask_line": "How old are you, if you don't mind me asking?",
+          "routes": {
+            "PASS": "next",
+            "FAIL": "end:AI-NOT-ELIGIBLE",
+            "UNCLEAR": "clarify",
+            "DNC": "end:AI-DNC",
+            "BUSY": "end:AI-BUSY"
+          },
+          "lines": {
+            "pass": "Thank you.",
+            "fail": "I appreciate your time, but this option is for ages 50 to 85. Thank you. Have a great day.",
+            "clarify": "I'm sorry, I didn't catch that. How old are you?"
+          },
+          "max_clarify": 1,
+          "age_min": 50,
+          "age_max": 85,
+          "pass_keywords": []
+        },
+        {
+          "id": "hospital_stay",
+          "kind": "yes_no",
+          "ask_line": "Have you had any hospital stays in the last 24 months?",
+          "routes": {
+            "NO": "transfer",
+            "YES": "end:AI-RECENT-HOSPITAL",
+            "REFUSE": "end:AI-REFUSED",
+            "UNSURE": "clarify",
+            "UNCLEAR": "clarify",
+            "DNC": "end:AI-DNC",
+            "BUSY": "end:AI-BUSY"
+          },
+          "lines": {
+            "no": "Thank you. One moment, let me connect you with a licensed agent.",
+            "yes": "I understand — thank you for your time. Have a great day.",
+            "refuse": "I understand. Thank you for your time. Have a great day.",
+            "unsure": "Just to confirm — any hospital stays in the last two years, yes or no?",
+            "repeat": "I'm sorry, I just need to confirm — any hospital stays in the last two years?"
+          },
+          "max_clarify": 2,
+          "age_min": null,
+          "age_max": null,
+          "pass_keywords": []
+        }
+      ],
+      "updated": "",
+      "disclosure": "Just so you know, this call may be recorded for quality and training purposes.",
+      "use_case_id": "UC-LINA-004",
+      "turn_detection_mode": "transcription_based",
+      "ambient_noise_enabled": false,
+      "interruption_min_words": 2,
+      "call_max_duration": 300,
+      "call_idle_timeout": 10,
+      "dictionary_words": [],
+      "voicemail_settings": {},
+      "widget_config": {},
+      "agent_uuid": ""
+    },
+    "mynewcampaign": {
+      "id": "mynewcampaign",
+      "name": "My New Campaign",
+      "description": "New campaign — edit the script and compliance, then deploy.",
+      "agent_name": "Lina",
+      "business_name": "EverTrust",
+      "persona_extra": "",
+      "lines": {
+        "greet": "Hi, this is {name} from {campaign}. How are you today?",
+        "transfer_handoff": "Thank you. One moment, let me get you connected with our licensed agent.",
+        "busy_close": "",
+        "not_interested_close": "",
+        "hello_checkin": ""
+      },
+      "questions": [],
+      "disclosure": "Just so you know, this call may be recorded for quality and training purposes.",
+      "updated": "2026-10-14T20:25:35.675322+00:00",
+      "use_case_id": "",
+      "turn_detection_mode": "transcription_based",
+      "ambient_noise_enabled": false,
+      "interruption_min_words": 2,
+      "call_max_duration": 300,
+      "call_idle_timeout": 10,
+      "dictionary_words": [],
+      "voicemail_settings": {},
+      "widget_config": {},
+      "agent_uuid": ""
+    }
+  },
+  "active": "medicare"
+}
