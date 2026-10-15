@@ -3,8 +3,11 @@
 """
 from __future__ import annotations
 
+import base64
+import hashlib
 import json
 import os
+import secrets
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -34,6 +37,78 @@ _DATA_DIR = os.environ.get("DATA_DIR", "data")
 CALL_LOG_PATH = os.path.join(_DATA_DIR, "call_log.json")
 CALL_LOG: list = []          # persistent call log (loaded from / saved to disk)
 _MAX_CALL_LOG = 5000         # keep the newest N on disk
+
+
+# ---------------- access control (WEB_PASSWORD) ----------------
+# Set WEB_PASSWORD in .env whenever the dashboard is reachable by anyone but the
+# machine itself. Every page, API and recording is then behind HTTP Basic auth.
+# Two deliberate details:
+#   * /health stays open, so monitoring (and scripts/healthcheck.py) still works;
+#   * a successful login also sets a cookie, because a browser cannot put an
+#     Authorization header on a WebSocket handshake — the live voice socket would
+#     otherwise be impossible to use from the dashboard.
+# An empty WEB_PASSWORD (the default) leaves the server open, as before.
+_AUTH_COOKIE = "bpo_auth"
+_AUTH_OPEN_PATHS = ("/health",)
+_AUTH_REALM = 'Basic realm="BPO Adriene"'
+
+
+def _web_password() -> str:
+    """Read at request time, so setting it (or the studio's Use) applies at once."""
+    return (getattr(CONFIG, "web_password", "") or "").strip()
+
+
+def _auth_token(password: str) -> str:
+    return hashlib.sha256(f"bpo-adriene:{password}".encode("utf-8")).hexdigest()[:32]
+
+
+def _basic_credentials(header: str) -> "tuple[str, str] | None":
+    if not header.lower().startswith("basic "):
+        return None
+    try:
+        raw = base64.b64decode(header.split(None, 1)[1].strip()).decode("utf-8")
+    except Exception:                                            # noqa: BLE001
+        return None
+    user, _, password = raw.partition(":")
+    return user, password
+
+
+def _authorised(request: Request) -> bool:
+    password = _web_password()
+    creds = _basic_credentials(request.headers.get("authorization", ""))
+    if creds and secrets.compare_digest(creds[1], password):
+        return True
+    cookie = request.cookies.get(_AUTH_COOKIE, "")
+    return bool(cookie) and secrets.compare_digest(cookie, _auth_token(password))
+
+
+def _ws_authorised(websocket: WebSocket) -> bool:
+    password = _web_password()
+    if not password:
+        return True
+    cookie = websocket.cookies.get(_AUTH_COOKIE, "")
+    if cookie and secrets.compare_digest(cookie, _auth_token(password)):
+        return True
+    creds = _basic_credentials(websocket.headers.get("authorization", ""))
+    if creds and secrets.compare_digest(creds[1], password):
+        return True
+    supplied = websocket.query_params.get("password", "")
+    return bool(supplied) and secrets.compare_digest(supplied, password)
+
+
+@app.middleware("http")
+async def _require_password(request: Request, call_next):
+    password = _web_password()
+    if not password or request.url.path in _AUTH_OPEN_PATHS:
+        return await call_next(request)
+    if not _authorised(request):
+        return Response(status_code=401, content="Authentication required",
+                        headers={"WWW-Authenticate": _AUTH_REALM})
+    response = await call_next(request)
+    if not request.cookies.get(_AUTH_COOKIE):
+        response.set_cookie(_AUTH_COOKIE, _auth_token(password),
+                            httponly=True, samesite="lax")
+    return response
 
 
 def _load_call_log() -> None:
@@ -1330,6 +1405,11 @@ async def ws_voice(websocket: WebSocket):
     Supports barge-in: the customer can interrupt the bot mid-sentence and it
     stops talking instantly, then listens to what they said.
     """
+    if not _ws_authorised(websocket):
+        # 4401 = unauthorised (custom close code, mirrors HTTP 401)
+        await websocket.close(code=4401)
+        return
+
     await websocket.accept()
 
     async def send(payload: dict):

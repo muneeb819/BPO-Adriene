@@ -3,7 +3,12 @@
 Everything you need to download this bot, run it on your own computer, and talk to
 Lina with a **real voice** (she speaks, you can speak back via microphone).
 
-> No phone system needed. Text chat works with **zero keys**; voice needs two free API keys.
+ > No phone system needed, and **no API keys at all**: the voice is a neural model
+ > (Piper/ONNX) that runs locally on CPU. Keys only add options — see Step 4.
+ >
+ > Deploying this on a real server instead of your laptop? Use
+ > [DEPLOYMENT.md](../DEPLOYMENT.md), which covers autostart, Asterisk, Docker,
+ > verification and troubleshooting.
 
 ---
 
@@ -12,31 +17,37 @@ Lina with a **real voice** (she speaks, you can speak back via microphone).
 **Option A: git clone (recommended)**
 
 ```bash
-git clone -b arena/9a6af3fe-final-expense-fronter https://github.com/muneeb819/final-expense-fronter.git
-cd final-expense-fronter
+git clone https://github.com/muneeb819/BPO-Adriene.git
+cd BPO-Adriene
 ```
 
 **Option B: ZIP download (no git needed)**
 
-Download and unzip:
-`https://github.com/muneeb819/final-expense-fronter/archive/refs/heads/arena/9a6af3fe-final-expense-fronter.zip`
+Download and unzip `https://github.com/muneeb819/BPO-Adriene/archive/refs/heads/main.zip`
 
 ---
 
-## Step 2 — Install Python dependencies
+## Step 2 — Install (one command)
 
-Requires **Python 3.10+** ([download here](https://www.python.org/downloads/)).
+Requires **Python 3.10+** (3.12 recommended — [download here](https://www.python.org/downloads/)).
+
+```powershell
+.\start.ps1                  # Windows: venv + dependencies + voices + .env, then starts
+```
+```bash
+python3 scripts/setup_local.py    # Linux/macOS: the same setup, without starting
+./start.sh                        #   then this
+```
+
+The launcher does everything below for you. Manual equivalent:
 
 ```bash
-# Windows (PowerShell) / macOS / Linux:
 python -m venv .venv
-
-# Activate it:
 #   Windows:  .venv\Scripts\activate
 #   macOS/Linux:  source .venv/bin/activate
-
 pip install --upgrade pip
 pip install -r requirements.txt
+python scripts/fetch_neural_voices.py            # 3 neural voices, ~190 MB, one time
 ```
 
 ---
@@ -52,62 +63,61 @@ The defaults already run in **debug mode** (text chat, no keys). For voice, add 
 
 ---
 
-## Step 4 — Get FREE voice API keys (2 minutes each)
+## Step 4 — Voices and keys (all optional)
 
-| Feature | Provider | Free tier | Get key |
+**Lina already speaks with no keys.** `.env` ships with
+`TTS_PROVIDER=piper` — real neural voices rendered locally on CPU by
+`scripts/neural_tts_server.py` (started by the launcher). Pick a voice in the
+dashboard's **🎙 Voice studio** (▶ Preview plays it, **Use** makes it live), or
+type a description in *Describe a voice* ("warm older British man, speaks slowly").
+
+Optional upgrades:
+
+| Want | Provider | Free tier | Get key |
 |---|---|---|---|
-| 🔊 **Lina speaks** (voice output) | ElevenLabs | 10,000 chars/mo free | [elevenlabs.io/app](https://elevenlabs.io/app) → profile → API keys |
-| 🎤 **Mic input** (you speak) | Deepgram | $200 free credit, no card | [console.deepgram.com](https://console.deepgram.com/) → API keys |
-
-Paste into your `.env`:
+| More expressive cloud voice, or generating a brand-new voice from a description | ElevenLabs | 10,000 chars/mo free | [elevenlabs.io/app](https://elevenlabs.io/app) → profile → API keys |
+| **Real phone calls** (the bot must hear the caller) | Deepgram | $200 credit, no card | [console.deepgram.com](https://console.deepgram.com/) → API keys |
+| Natural, varied wording instead of the scripted lines | OpenAI / Anthropic / Gemini / Ollama | varies | any provider |
 
 ```env
-TTS_PROVIDER=elevenlabs
+# cloud voice (optional — the local neural voices need nothing)
 ELEVENLABS_API_KEY=sk_your_key_here
+# TTS_PROVIDER=elevenlabs        # switch to it if you prefer
+# real call audio (required for live phone calls, not for this local test)
 STT_PROVIDER=deepgram
 DEEPGRAM_API_KEY=your_key_here
-```
-
-### Optional: add Kokoro as a free local standby voice
-
-If you want a voice that costs nothing and works with no API key, run Kokoro
-locally. The bot uses it as an automatic standby: if ElevenLabs ever fails
-mid-call, the bot switches to Kokoro instead of dropping the call.
-
-```powershell
-.\start-kokoro.ps1        # first run installs ~1.5-2 GB of CPU torch + weights
-```
-
-```env
-TTS_STANDBY_PROVIDER=kokoro
-KOKORO_BASE_URL=http://localhost:8880
-KOKORO_VOICE=af_bella
-```
-
-Check it is up: `http://localhost:8880/health` and `GET /v1/audio/voices`.
-
-Optional (smarter brain — or skip it, the built-in mock brain works offline):
-
-```env
+# smarter brain (optional)
 LLM_PROVIDER=openai
 OPENAI_API_KEY=sk_your_key_here
 ```
+
+If you install `chatterbox-tts` (2-3 GB of weights) you can also name it as the
+engine and clone any reference recording — the Voice studio's **☑ Render on a
+neural voice** already lets you judge a recording on the local voices without it.
 
 ---
 
 ## Step 5 — Launch the bot 🚀
 
+```powershell
+.\start.ps1            # Windows       (starts the voice server too)
+```
 ```bash
-python cli.py debug
+./start.sh             # Linux/macOS
 ```
 
 You'll see a smoke test pass, then:
 
 ```
-Starting web on 0.0.0.0:8000 [tts=elevenlabs]
+[voice] starting the neural voice server on :8880 — ready
+Starting web on 0.0.0.0:8000 [tts=piper]
   Dashboard:     http://0.0.0.0:8000/
   Debug console: http://0.0.0.0:8000/debug
+  Health:        http://0.0.0.0:8000/health
 ```
+
+Not sure everything is wired up? `python scripts/healthcheck.py` prints a
+readiness report (and speaks a sentence through the engine to prove audio works).
 
 Open **`http://localhost:8000/debug`** in Chrome or Edge.
 
@@ -154,6 +164,13 @@ then play the `.mp3` files in `data/stream_test/`.
 
 ## Going live later (phone calls)
 
-Set `ARI_*` (Asterisk), `VICIDIAL_*`, `STT_PROVIDER=deepgram`, `TTS_PROVIDER=elevenlabs`,
-route your DID to the Stasis app (see `configs/extensions.conf.example`), and run
-`python cli.py serve`. See `README.md` + `docs/BUDGET_COST_STRUCTURE.md` for costs.
+Set `ARI_*` (Asterisk), `VICIDIAL_*` and `STT_PROVIDER=deepgram` (+ its key) so the
+bot can hear the caller, route your DID to the Stasis app (see
+`configs/extensions.conf.example`), and run `python cli.py serve` — or
+`./start.sh --serve` / `.\start.ps1 -Serve`, which also keeps the local neural
+voice engine running. Keep `TTS_PROVIDER=piper` for free local speech, or switch to
+`elevenlabs`/`chatterbox`.
+
+**[DEPLOYMENT.md](../DEPLOYMENT.md)** is the full server guide (autostart, systemd /
+NSSM, Docker, verification, troubleshooting, backups). Costs:
+`docs/BUDGET_COST_STRUCTURE.md`.

@@ -1,4 +1,4 @@
-# Jessica FE Fronter — Final Expense Voice Fronter
+# BPO Adriene — AI Voice Fronter
 
 An AI **voice calling agent** that acts as a *fronter* for final-expense (burial/whole-life) leads. It answers the call, qualifies the prospect using a beat-based dialogue, and either **transfers qualified leads to a live closer** (VICIdial queue/agent) or politely logs the disposition and hangs up.
 
@@ -16,7 +16,7 @@ Built in Python, integrates with **VICIdial / Asterisk** via ARI, powered by Ope
 caller → Asterisk → Stasis(jessica-fe-fronter)
                       → ARI client (answer/record/play/redirect)
                       → Conversation engine (LLM + beat-based state machine)
-                      → TTS (ElevenLabs v3 Jessica / free neural fallback)
+                      → TTS (local neural Piper voices by default; ElevenLabs/ChatterBox optional)
                       → STT (Deepgram)
                       → eligible? redirect to closer queue : hangup + log
                       → VICIdial non-agent API (disposition)
@@ -28,7 +28,9 @@ Core modules:
 - `agent/prompt.py` – Jessica persona + beat instructions (professional, calm, sales-appropriate)
 - `agent/qualifier.py` – intent classifier + age extractor (45–80 window)
 - `agent/conversation.py` – beat-based state machine (greeting → hook → age → transfer)
-- `agent/stt.py`, `agent/tts.py` – speech providers (ElevenLabs v3 primary, console for testing)
+- `agent/stt.py`, `agent/tts.py` – speech providers (piper = local neural voices by default; ElevenLabs / ChatterBox / Kokoro optional)
+- `agent/neural_tts.py`, `agent/voice_library.py` – local neural engine (render/match/design) + the voice studio library
+- `scripts/neural_tts_server.py`, `scripts/fetch_neural_voices.py` – offline voice server + model downloader
 - `agent/ari.py` – Asterisk ARI client (answer/play/record/redirect)
 - `agent/call_session.py` – channel abstraction (ConsoleChannel / AriChannel)
 - `agent/vicidial.py` – dialer disposition logging
@@ -36,14 +38,37 @@ Core modules:
 - `scripts/make_demo_recording.py` – generates demo call with Edge neural voices (free)
 
 ## Quick start (no PBX needed)
+
+One command per platform — it creates the virtual environment, installs the
+dependencies, writes `.env` from the example, downloads the neural voices and
+starts **both** processes (voice engine on :8880, app on :8000):
+
+```powershell
+.\start.ps1                      # Windows  (add -Serve for the live PBX mode)
+```
+```bash
+python3 scripts/setup_local.py    # Linux/macOS, then:
+./start.sh                        #   ./start.sh --serve for the live PBX mode
+```
+
+Then open **`http://localhost:8000/`** (dashboard) or **`/debug`** to chat with
+(and hear 🎙️) Lina. No keys are required for speech: the voices are neural
+models running locally on CPU.
+
+Manual equivalent:
+
 ```bash
 python -m venv .venv && source .venv/bin/activate  # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
-cp .env.example .env   # text mode works with zero keys; add voice keys for speech
-python cli.py debug    # smoke test + dashboard (/) + interactive debug console (/debug)
+cp .env.example .env
+python scripts/fetch_neural_voices.py                 # once, ~190 MB
+python scripts/neural_tts_server.py --port 8880 --warm &   # voice engine
+python cli.py debug                                # smoke test + dashboard + console
 ```
-Then open **`http://localhost:8000/debug`** to chat with (and hear 🎙️) Lina.
-Full local + voice guide: [`docs/LOCAL_VOICE_SETUP.md`](docs/LOCAL_VOICE_SETUP.md).
+
+**Deploying on your own server?** [`DEPLOYMENT.md`](DEPLOYMENT.md) covers
+prerequisites, `.env`, autostart (NSSM / systemd), Docker, Asterisk wiring,
+verification and troubleshooting.
 
 Other commands:
 ```bash
@@ -54,12 +79,15 @@ python cli.py serve    # production-style server (dashboard + ARI listener)
 ```
 
 ## Verify everything works
-Three independent levels, cheapest first:
+Four independent levels, cheapest first:
 ```bash
-python -m pytest tests/ -q          # 136 unit/integration tests (tmp stores, no server needed)
-python scripts/healthcheck.py       # readiness report (deps, keys, config, live server)
-python scripts/smoke_test.py        # full-feature end-to-end test against a running server
+python scripts/healthcheck.py       # readiness report — incl. a real voice render (exit 0 = ready)
+python -m pytest tests/ -q          # 384 unit/integration tests (tmp stores, no server needed)
+python scripts/verify_voice_studio.py --url http://localhost:8000   # 49 voice-studio checks
+python scripts/smoke_test.py        # 126 end-to-end checks against a running server
 ```
+`healthcheck.py --json` prints the same report machine-readably, so it can gate a
+deployment from CI or a scheduled task.
 `smoke_test.py` drives **every** HTTP endpoint and **every** disposition path —
 all four campaigns, the age boundaries, DNC/busy/unclear, campaign create →
 edit → deploy → delete, insights, CSV/JSON exports, recordings (incl. a path
@@ -67,17 +95,24 @@ traversal guard) and the real-time voice WebSocket. It needs the server up:
 
 ```bash
 python cli.py debug                 # terminal 1
-python scripts/smoke_test.py        # terminal 2  → "ALL 127 CHECKS PASSED"
+python scripts/smoke_test.py        # terminal 2  → "ALL 126 CHECKS PASSED"
 python scripts/smoke_test.py --url http://localhost:9000 --no-ws
 ```
 
 ## Live deployment (VICIdial + Asterisk)
+
+Full walkthrough — including autostart, Docker and troubleshooting — is in
+[`DEPLOYMENT.md`](DEPLOYMENT.md). The short version:
+
 1. Enable ARI in `ari.conf` (`enabled = yes`, create `ari` user with read/write).
 2. Route your inbound final-expense DID to the Stasis app — see `configs/extensions.conf.example`.
 3. Create a `closers` queue (or set `CLOSER_EXTENSION`) in VICIdial for handoff.
-4. Set `.env`: `LLM_PROVIDER`, keys, `STT_PROVIDER=deepgram`, `TTS_PROVIDER=elevenlabs`,
-   `ARI_*` and `VICIDIAL_*`.
-5. Run: `python cli.py serve` (starts web dashboard + ARI listener).
+4. Set `.env`: `DEBUG=false`, `STT_PROVIDER=deepgram` + `DEEPGRAM_API_KEY` (real calls),
+   `ARI_*`, `VICIDIAL_*`, and a `WEB_PASSWORD` if the dashboard is reachable.
+   Keep `TTS_PROVIDER=piper` (local neural voices, no key) or switch to
+   `elevenlabs`/`chatterbox` if you prefer.
+5. Start it: `./start.sh --serve` (Windows: `.\start.ps1 -Serve`), or install the
+   systemd units in `deploy/`, or `docker compose up -d`.
 
 ## Voice studio (library, design, matching, remix)
 
@@ -113,6 +148,22 @@ voices:
 ```
 
 ## Voice configuration
+
+### Default: local neural voices (Piper/ONNX) — free, offline, no key
+
+```bash
+python scripts/fetch_neural_voices.py                    # once: ~190 MB, 3 voices
+python scripts/neural_tts_server.py --port 8880 --warm   # the engine (start.ps1 / start.sh do this)
+```
+
+`TTS_PROVIDER=piper` renders a sentence in ~0.3 s on CPU, reports itself through
+`X-Voice-Engine`/`X-Voice-Model` so previews can never lie about who spoke, and is
+what the Voice studio renders, matches and designs against. Voices live in
+`data/models/piper/` (git-ignored); drop in any other `<name>.onnx` +
+`<name>.onnx.json` pair and it appears in `/health` and the studio immediately.
+Verified by `tests/test_neural_tts.py`, `tests/test_piper_provider.py` and
+`scripts/verify_voice_studio.py` (which measures the rendered audio, not just the
+HTTP status).
 
 ### ChatterBox (local, clonable, 23 languages)
 
@@ -222,7 +273,10 @@ under **Call recordings**: press play there to hear the exact bytes the bot sent
 | `CALLING_HOUR_START` / `CALLING_HOUR_END` | compliance window (default 8–21) |
 
 ## Docs
-- [Local + Voice Setup](docs/LOCAL_VOICE_SETUP.md) — download, install, free voice keys, talk to Lina in 5 minutes.
+- [DEPLOYMENT.md](DEPLOYMENT.md) — **deploying on your own server**: prerequisites, `.env`, autostart (NSSM/systemd), Docker, Asterisk, verification, troubleshooting, backup.
+- [VOICE_STUDIO.md](VOICE_STUDIO.md) — the voice library, prompt-to-voice, matching and remixing, with the full API.
+- [Local + Voice Setup](docs/LOCAL_VOICE_SETUP.md) — download, install, talk to Lina in 5 minutes.
+- [ChatterBox features](CHATTERBOX_FEATURES.md) — the ChatterBox engine reference and what was verified.
 - [Budget Cost Structure + scientific diagrams](docs/BUDGET_COST_STRUCTURE.md) — per-call economics, monthly budgets (Pilot/Growth/Scale), architecture & call-flow diagrams.
 
 ## Notes
