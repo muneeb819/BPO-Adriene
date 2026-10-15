@@ -31,12 +31,34 @@ def cmd_demo():
     print(result)
 
 
+def _restore_saved_voice(config) -> None:
+    """Re-apply the voice the operator last chose in the studio.
+
+    The library remembers which voice is active; without this the bot would come
+    back speaking whatever `.env` says while the dashboard showed a different
+    voice as "ACTIVE". Failures are reported, never fatal.
+    """
+    try:
+        from agent.voice_library import get_library
+
+        library = get_library(config.voice_library_dir)
+        vid = library.active_id()
+        if not vid or library.find(vid) is None:
+            return
+        applied = library.apply(vid, config)
+        print(f"[voice] restored the saved voice '{applied['name']}' ({applied['engine']})")
+    except Exception as e:                                     # noqa: BLE001
+        print(f"[voice] could not restore the saved voice: {e}")
+
+
 def cmd_serve():
     import uvicorn
 
     from server.app import CONFIG, CALL_LOG
     from agent.service import build_stasis_handler
     from agent.ari import ARI
+
+    _restore_saved_voice(CONFIG)
 
     print(f"Starting web on {CONFIG.host}:{CONFIG.port} [tts={CONFIG.tts_provider}]")
     print(f"  Dashboard:     http://{CONFIG.host}:{CONFIG.port}/")

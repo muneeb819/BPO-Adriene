@@ -262,3 +262,135 @@ def test_debug_chat_still_works_with_blank_llm_key(client):
     r = client.post("/api/debug/chat", json={"session_id": sid, "text": "hello"})
     assert r.status_code == 200
     assert r.json().get("agent") or r.json().get("reply")
+
+
+# ---------------------------------------------------------------------------
+# WEB_PASSWORD — the dashboard must be protectable on a real server
+# ---------------------------------------------------------------------------
+
+class TestDashboardPassword:
+    """A local server on a LAN needs a lock on the door.
+
+    `GET /health` stays open so monitoring (and scripts/healthcheck.py) still
+    works; everything else — pages, APIs, recordings — needs the password.
+    """
+
+    @pytest.fixture()
+    def locked(self, tmp_store, tmp_memory, tmp_path, monkeypatch):
+        import server.app as appmod
+
+        monkeypatch.setattr(appmod.CONFIG, "web_password", "s3cret")
+        monkeypatch.setattr(appmod, "CALL_LOG_PATH", str(tmp_path / "call_log.json"))
+        with TestClient(appmod.app) as c:
+            yield c
+
+    def test_pages_and_apis_require_a_password(self, locked):
+        r = locked.get("/")
+        assert r.status_code == 401
+        assert r.headers["www-authenticate"].startswith("Basic ")
+        assert locked.get("/api/voices").status_code == 401
+        assert locked.get("/api/campaigns").status_code == 401
+
+    def test_health_stays_open_for_monitoring(self, locked):
+        r = locked.get("/health")
+        assert r.status_code == 200 and r.json()["status"] == "ok"
+
+    def test_the_wrong_password_is_rejected(self, locked):
+        r = locked.get("/", auth=("any", "nope"))
+        assert r.status_code == 401
+        # a wrong user with the right password is still fine: the user is not checked
+        assert locked.get("/", auth=("lina", "s3cret")).status_code == 200
+
+    def test_the_right_password_opens_everything_and_sets_a_cookie(self, locked):
+        r = locked.get("/", auth=("lina", "s3cret"))
+        assert r.status_code == 200
+        cookie = r.cookies.get("bpo_auth")
+        assert cookie, "a login must set the cookie the voice socket needs"
+        # the cookie alone is enough (that is what the WebSocket handshake sends)
+        locked.cookies.set("bpo_auth", cookie)
+        assert locked.get("/api/campaigns").status_code == 200
+
+    def test_a_forged_cookie_does_not_work(self, locked):
+        locked.cookies.set("bpo_auth", "0" * 32)
+        assert locked.get("/").status_code == 401
+
+    def test_an_open_server_needs_no_credentials(self, tmp_store, tmp_memory, monkeypatch):
+        """The default (no password) must keep working exactly as before."""
+        import server.app as appmod
+
+        monkeypatch.setattr(appmod.CONFIG, "web_password", "")
+        with TestClient(appmod.app) as c:
+            assert c.get("/").status_code == 200
+            assert c.get("/api/voices").status_code == 200
+
+
+def test_the_voice_socket_checks_the_password(tmp_store, tmp_memory, monkeypatch):
+    """The mic socket is a door into the bot — it must not be a way around the 401."""
+    import server.app as appmod
+
+    monkeypatch.setattr(appmod.CONFIG, "web_password", "s3cret")
+    with TestClient(appmod.app) as c:
+        with pytest.raises(Exception):
+            with c.websocket_connect("/ws/voice"):
+                pass
+        c.cookies.set("bpo_auth", appmod._auth_token("s3cret"))
+        with c.websocket_connect("/ws/voice") as ws:
+            assert ws.receive_json()["type"]                # the session announced itself
+
+
+def test_debug_voice_reports_the_engine_that_is_actually_selected(tmp_store, tmp_memory, monkeypatch):
+    """The debug console must not cry "voice keys missing" when a voice works.
+
+    Ported from main's "include ChatterBox in realtime voice check" fix, extended
+    to the local neural engine: the payload names the selected voice, whether the
+    live socket can run, and — when it cannot — exactly what is missing.
+    """
+    import server.app as appmod
+
+    for provider, expected in (("piper", "en_US-amy-low"),
+                               ("chatterbox", "ChatterBox/multilingual"),
+                               ("elevenlabs", "Jessica")):
+        monkeypatch.setattr(appmod.CONFIG, "tts_provider", provider)
+        monkeypatch.setattr(appmod.CONFIG, "tts_standby_provider", "")
+        with TestClient(appmod.app) as c:
+            body = c.get("/api/debug/voice").json()
+        assert body["tts_provider"] == provider
+        assert body["voice"] == expected, (provider, body["voice"])
+        assert body["speak"] is True
+
+    # No mic configured -> the socket is not "realtime", and the warning must name
+    # the missing piece (the STT key), not pretend the voice engine is broken.
+    monkeypatch.setattr(appmod.CONFIG, "tts_provider", "piper")
+    monkeypatch.setattr(appmod.CONFIG, "stt_provider", "console")
+    with TestClient(appmod.app) as c:
+        body = c.get("/api/debug/voice").json()
+    assert body["realtime"] is False
+    assert "DEEPGRAM_API_KEY" in body["warning"]
+    assert "piper" in body["warning"]
+
+    # With a mic configured the live socket is realtime and there is no warning.
+    monkeypatch.setattr(appmod.CONFIG, "stt_provider", "deepgram")
+    monkeypatch.setattr(appmod.CONFIG, "deepgram_api_key", "dg-test")
+    with TestClient(appmod.app) as c:
+        body = c.get("/api/debug/voice").json()
+    assert body["realtime"] is True and body["warning"] == ""
+
+
+@pytest.mark.parametrize("engine,voice", [("piper", "en_US-lessac-medium"),
+                                          ("kokoro", "af_bella")])
+def test_a_draft_preview_renders_for_every_engine_in_the_designer(
+        tmp_store, tmp_memory, engine, voice):
+    """The designer's engine picker lists three engines — all three must render.
+
+    Regression: `piper` was offered by the studio UI while the draft-preview
+    endpoint still rejected anything but chatterbox/kokoro.
+    """
+    with TestClient(appmod.app) as c:
+        r = c.post("/api/voices/preview-draft",
+                   json={"engine": engine, "voice": voice, "tuning": {"speed": 1.0},
+                         "text": "Hello, this is a preview of my voice."})
+        if r.status_code != 200:                     # engine not installed here
+            pytest.skip(f"{engine} is not running on this machine: {r.json()}")
+        assert r.headers["content-type"] == "audio/wav"
+        assert len(r.content) > 20_000               # a real sentence, not a blip
+        assert r.headers["X-Voice-Requested"] == engine

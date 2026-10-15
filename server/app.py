@@ -3,8 +3,11 @@
 """
 from __future__ import annotations
 
+import base64
+import hashlib
 import json
 import os
+import secrets
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -34,6 +37,78 @@ _DATA_DIR = os.environ.get("DATA_DIR", "data")
 CALL_LOG_PATH = os.path.join(_DATA_DIR, "call_log.json")
 CALL_LOG: list = []          # persistent call log (loaded from / saved to disk)
 _MAX_CALL_LOG = 5000         # keep the newest N on disk
+
+
+# ---------------- access control (WEB_PASSWORD) ----------------
+# Set WEB_PASSWORD in .env whenever the dashboard is reachable by anyone but the
+# machine itself. Every page, API and recording is then behind HTTP Basic auth.
+# Two deliberate details:
+#   * /health stays open, so monitoring (and scripts/healthcheck.py) still works;
+#   * a successful login also sets a cookie, because a browser cannot put an
+#     Authorization header on a WebSocket handshake — the live voice socket would
+#     otherwise be impossible to use from the dashboard.
+# An empty WEB_PASSWORD (the default) leaves the server open, as before.
+_AUTH_COOKIE = "bpo_auth"
+_AUTH_OPEN_PATHS = ("/health",)
+_AUTH_REALM = 'Basic realm="BPO Adriene"'
+
+
+def _web_password() -> str:
+    """Read at request time, so setting it (or the studio's Use) applies at once."""
+    return (getattr(CONFIG, "web_password", "") or "").strip()
+
+
+def _auth_token(password: str) -> str:
+    return hashlib.sha256(f"bpo-adriene:{password}".encode("utf-8")).hexdigest()[:32]
+
+
+def _basic_credentials(header: str) -> "tuple[str, str] | None":
+    if not header.lower().startswith("basic "):
+        return None
+    try:
+        raw = base64.b64decode(header.split(None, 1)[1].strip()).decode("utf-8")
+    except Exception:                                            # noqa: BLE001
+        return None
+    user, _, password = raw.partition(":")
+    return user, password
+
+
+def _authorised(request: Request) -> bool:
+    password = _web_password()
+    creds = _basic_credentials(request.headers.get("authorization", ""))
+    if creds and secrets.compare_digest(creds[1], password):
+        return True
+    cookie = request.cookies.get(_AUTH_COOKIE, "")
+    return bool(cookie) and secrets.compare_digest(cookie, _auth_token(password))
+
+
+def _ws_authorised(websocket: WebSocket) -> bool:
+    password = _web_password()
+    if not password:
+        return True
+    cookie = websocket.cookies.get(_AUTH_COOKIE, "")
+    if cookie and secrets.compare_digest(cookie, _auth_token(password)):
+        return True
+    creds = _basic_credentials(websocket.headers.get("authorization", ""))
+    if creds and secrets.compare_digest(creds[1], password):
+        return True
+    supplied = websocket.query_params.get("password", "")
+    return bool(supplied) and secrets.compare_digest(supplied, password)
+
+
+@app.middleware("http")
+async def _require_password(request: Request, call_next):
+    password = _web_password()
+    if not password or request.url.path in _AUTH_OPEN_PATHS:
+        return await call_next(request)
+    if not _authorised(request):
+        return Response(status_code=401, content="Authentication required",
+                        headers={"WWW-Authenticate": _AUTH_REALM})
+    response = await call_next(request)
+    if not request.cookies.get(_AUTH_COOKIE):
+        response.set_cookie(_AUTH_COOKIE, _auth_token(password),
+                            httponly=True, samesite="lax")
+    return response
 
 
 def _load_call_log() -> None:
@@ -230,7 +305,7 @@ def debug_transcript(session_id: str = ""):
 @app.post("/api/debug/speak")
 async def debug_speak(request: Request):
     from agent.tts import TTS
-    from agent.tts import streaming_wav_header
+    from agent.tts import wav_from_pcm16
 
     data = await request.json()
     text = (data.get("text") or "").strip()[:800]
@@ -243,20 +318,25 @@ async def debug_speak(request: Request):
                        "or TTS_PROVIDER=kokoro (see start-kokoro.ps1) in .env"},
             status_code=400,
         )
+    # Speak through the SAME path a live call uses (synthesize_stream_pcm), so the
+    # dashboard's "Test voice" button also exercises primary → standby failover
+    # instead of hitting the primary engine directly and erroring out.
+    chunks: list[bytes] = []
     try:
-        audio = tts.synthesize(text)
+        async for chunk in tts.synthesize_stream_pcm(text):
+            chunks.append(chunk)
     except Exception as e:
-        return JSONResponse({"error": f"TTS failed: {e}"}, status_code=502)
+        return JSONResponse(
+            {"error": f"TTS failed on {tts.active} (primary={tts.primary}, "
+                      f"standby={tts.standby or 'none'}): {e}"},
+            status_code=502,
+        )
+    audio = b"".join(chunks)
     if not audio:
         return JSONResponse({"error": "TTS returned no audio"}, status_code=502)
-    if tts.active == "chatterbox":
-        # synthesize() returns raw PCM16 @16 kHz for ChatterBox — wrap it in a
-        # WAV header so the browser can play it in the debug console.
-        media = "audio/wav"
-        audio = streaming_wav_header() + audio
-    else:
-        media = "audio/wav" if tts.active == "kokoro" else "audio/mpeg"
-    return Response(content=audio, media_type=media)
+    # The pipeline always yields raw PCM16 @16 kHz, so wrap it in a fully
+    # formed WAV (real sizes, not sentinel values) for the browser.
+    return Response(content=wav_from_pcm16(audio), media_type="audio/wav")
 
 
 @app.post("/api/debug/transcribe")
@@ -303,6 +383,13 @@ def tts_voices():
     from agent.tts import TTS
     tts = TTS(c)
     result = {"provider": tts.active, "primary": tts.primary, "standby": tts.standby}
+    if tts.active != tts.primary:
+        # Never make the dashboard guess why the configured engine is silent.
+        # `status()` also consults the class-level record left by the request
+        # that actually failed — a fresh TTS instance has no reason of its own.
+        reason = tts.status()["failover_reason"]
+        if reason:
+            result["failover_reason"] = reason
 
     if tts.active == "kokoro":
         import requests
@@ -341,8 +428,40 @@ def tts_voices():
         result["voices"] = [{"id": c.elevenlabs_voice, "name": c.elevenlabs_voice}]
         result["model"] = c.elevenlabs_model
         result["current_voice"] = c.elevenlabs_voice
+    elif tts.active == "piper":
+        # Local neural voices: ask the offline server what it has installed.
+        import requests
+
+        result["model"] = c.piper_model
+        result["current_voice"] = c.piper_voice or "(server default)"
+        try:
+            r = requests.get(f"{c.piper_base_url.rstrip('/')}/v1/audio/voices", timeout=3)
+            payload = r.json() if r.status_code == 200 else {}
+        except Exception:
+            payload = {}
+        details = payload.get("voice_details") or []
+        result["voices"] = ([{"id": v["id"], "name": v.get("name") or v["id"],
+                              "language": v.get("language"), "kind": v.get("kind"),
+                              "neural": True} for v in details]
+                            or [{"id": v, "name": v} for v in payload.get("voices", [])])
+        result["reachable"] = bool(result["voices"])
+        result["known_voices"] = result["voices"]
+        result["engine"] = "piper"
+        result["neural"] = True
     else:
         result["voices"] = []
+
+    # A failed-over ChatterBox deployment still needs its full model metadata.
+    # The dashboard's voice panel renders its model / language / tag controls
+    # from `model_info` and `available_models`, so keying those on the *active*
+    # engine left every dropdown empty (and the status line reading
+    # "out NaNkHz") after a failover — precisely when an operator needs to
+    # re-route the engine.
+    if tts.primary == "chatterbox" and "model_info" not in result:
+        from agent.tts import CHATTERBOX_MODELS
+
+        result["model_info"] = tts.chatterbox_model_info()
+        result["available_models"] = list(CHATTERBOX_MODELS)
     return result
 
 
@@ -355,27 +474,660 @@ async def tts_switch_voice(request: Request):
     from agent.tts import TTS
     tts = TTS(CONFIG)
     provider = tts.active
+    if tts.primary == "chatterbox":
+        # This endpoint configures the *selected* engine, not whichever engine
+        # happens to be speaking at this instant. After a failover `active`
+        # becomes the standby, which used to send every model/language/voice
+        # request down the kokoro branch (or 400 "empty voice") — exactly when
+        # an operator is most likely to be re-routing the ChatterBox engine.
+        provider = "chatterbox"
     voice = data.get("voice", "").strip()
     if not voice and provider != "chatterbox":
         return JSONResponse({"error": "empty voice"}, status_code=400)
     if provider == "kokoro":
         CONFIG.kokoro_voice = voice
         return {"ok": True, "provider": provider, "voice": voice}
+    elif provider == "piper":
+        # Changing the voice keeps the current tuning; pitch/speed arrive through
+        # the voice library (a library voice carries its own measured tuning).
+        CONFIG.piper_voice = voice
+        tune = data.get("tuning") or {}
+        if "pitch" in tune:
+            CONFIG.piper_pitch = int(float(tune["pitch"]))
+        if "speed" in tune:
+            CONFIG.piper_speed = float(tune["speed"])
+        if "volume" in tune:
+            CONFIG.piper_volume = float(tune["volume"])
+        return {"ok": True, "provider": provider, "voice": voice,
+                "pitch": CONFIG.piper_pitch, "speed": CONFIG.piper_speed,
+                "volume": CONFIG.piper_volume}
     elif provider == "elevenlabs":
         CONFIG.elevenlabs_voice = voice
         return {"ok": True, "provider": provider, "voice": voice}
     elif provider == "chatterbox":
-        if "model" in data and data["model"] != CONFIG.chatterbox_model:
-            result = tts.switch_chatterbox_model(data["model"])
-            return {"ok": True, "provider": provider, "result": result, "model_info": tts.chatterbox_model_info()}
-        if data.get("language"):
-            CONFIG.chatterbox_language = str(data["language"]).strip()
-            return {"ok": True, "provider": provider, "language": CONFIG.chatterbox_language, "model_info": tts.chatterbox_model_info()}
-        if voice:
-            CONFIG.chatterbox_voice_path = voice
-            return {"ok": True, "provider": provider, "voice": voice, "model_info": tts.chatterbox_model_info()}
-        return {"ok": True, "provider": provider, "model_info": tts.chatterbox_model_info()}
+        # One request may carry model + language + voice together (that is what
+        # the documented curl does), and every field must actually stick.
+        # Previously the chain returned after the first branch, so "language"
+        # and "voice" were silently dropped and an unknown model raised
+        # ValueError → HTTP 500 instead of a friendly 400.
+        from agent.tts import CHATTERBOX_LANGUAGES, CHATTERBOX_MODELS
+
+        try:
+            resolved = tts.chatterbox_settings(data)
+        except ValueError as e:
+            return JSONResponse(
+                {"error": str(e), "available_models": list(CHATTERBOX_MODELS),
+                 "available_languages": list(CHATTERBOX_LANGUAGES)},
+                status_code=400,
+            )
+
+        if "model" in data and resolved["model"] != CONFIG.chatterbox_model:
+            try:
+                tts.switch_chatterbox_model(resolved["model"])
+            except ValueError as e:
+                return JSONResponse(
+                    {"error": str(e), "available_models": list(CHATTERBOX_MODELS)},
+                    status_code=400,
+                )
+        elif resolved["model"] in CHATTERBOX_MODELS:
+            # Keep the config in step even when the engine is unchanged, so
+            # model_info never reports a different engine than the one in use.
+            CONFIG.chatterbox_model = resolved["model"]
+
+        if resolved["language"]:
+            CONFIG.chatterbox_language = resolved["language"]
+
+        voice_error = None
+        if resolved["voice"] is not None:
+            if resolved["voice"]:
+                voice_error = tts.validate_voice_reference(resolved["voice"])
+                if voice_error:
+                    return JSONResponse({"error": voice_error}, status_code=400)
+            CONFIG.chatterbox_voice_path = resolved["voice"] or ""
+        elif CONFIG.chatterbox_voice_path:
+            # A different engine was selected; a reference cloned for the old
+            # one may no longer be valid, so re-check it rather than pretend.
+            voice_error = tts.validate_voice_reference(CONFIG.chatterbox_voice_path)
+
+        return {
+            "ok": True,
+            "provider": provider,
+            "result": resolved["message"],
+            "model_info": tts.chatterbox_model_info(),
+            "available_models": list(CHATTERBOX_MODELS),
+            "available_languages": dict(CHATTERBOX_LANGUAGES),
+            "applied": {
+                "model": CONFIG.chatterbox_model,
+                "language": CONFIG.chatterbox_language,
+                "voice": CONFIG.chatterbox_voice_path,
+            },
+            **({"warning": voice_error} if voice_error else {}),
+        }
     return JSONResponse({"error": f"unsupported provider {provider}"}, status_code=400)
+
+
+# ---------------- VOICE STUDIO (library / design / remix) ----------------
+DEFAULT_PREVIEW_TEXT = (
+    "Hi, this is Lina from EverTrust. I'm calling about your Medicare benefits, "
+    "and I wanted to see how you're doing today."
+)
+
+
+def _library():
+    from agent.voice_library import get_library
+
+    return get_library(CONFIG.voice_library_dir)
+
+
+def _voice_error(e) -> JSONResponse:
+    from agent.audio_dsp import AudioError
+
+    if isinstance(e, AudioError):
+        return JSONResponse({"error": str(e)}, status_code=400)
+    if isinstance(e, KeyError):
+        return JSONResponse({"error": f"unknown voice '{e.args[0]}'"}, status_code=404)
+    raise e
+
+
+def _designer_options() -> dict:
+    """Everything the dashboard panels need to build their controls."""
+    from agent.tts import CHATTERBOX_LANGUAGES, CHATTERBOX_MODELS
+
+    backend_voices = []
+    backend_engine = ""
+    try:
+        import requests
+
+        r = requests.get(f"{CONFIG.kokoro_base_url.rstrip('/')}/v1/audio/voices", timeout=3)
+        if r.status_code == 200:
+            data = r.json()
+            # The same wire format serves both local engines, so report which one
+            # is really behind the URL (the label "kokoro" is historical).
+            backend_engine = str(data.get("engine") or data.get("model") or "")
+            details = data.get("voice_details")
+            if isinstance(details, list) and details:
+                backend_voices = details
+            else:
+                backend_voices = [{"id": v, "name": v} for v in data.get("voices", [])
+                                  if isinstance(v, str)]
+    except Exception:
+        backend_voices = []
+        backend_engine = ""
+    from agent import elevenlabs_design as el
+    from agent import neural_tts
+    from agent.voice_library import ENGINES
+
+    try:
+        neural_voices = neural_tts.describe_models()
+    except Exception as exc:                                  # noqa: BLE001
+        neural_voices = []
+        neural_error = str(exc)
+    else:
+        neural_error = ""
+    return {
+        "engines": list(ENGINES),
+        "neural_voices": neural_voices,
+        "neural_error": neural_error,
+        "design_providers": el.providers(CONFIG),
+        "chatterbox_models": list(CHATTERBOX_MODELS),
+        "chatterbox_languages": dict(CHATTERBOX_LANGUAGES),
+        "chatterbox_tags": ["[laugh]", "[chuckle]", "[cough]", "[sigh]",
+                            "[gasp]", "[yawn]", "[um]"],
+        "backend_voices": backend_voices,
+        "backend_engine": backend_engine,
+        "presets": [
+            {"id": "warm", "name": "Warm & calm",
+             "tuning": {"exaggeration": 0.35, "cfg_weight": 0.5, "temperature": 0.7, "speed": 0.95, "pitch": 48}},
+            {"id": "bright", "name": "Bright & upbeat",
+             "tuning": {"exaggeration": 0.75, "cfg_weight": 0.4, "temperature": 0.9, "speed": 1.08, "pitch": 60}},
+            {"id": "serious", "name": "Serious & steady",
+             "tuning": {"exaggeration": 0.2, "cfg_weight": 0.7, "temperature": 0.6, "speed": 0.98, "pitch": 38}},
+            {"id": "energetic", "name": "Energetic",
+             "tuning": {"exaggeration": 0.9, "cfg_weight": 0.35, "temperature": 1.0, "speed": 1.15, "pitch": 56}},
+        ],
+        "max_reference_seconds": 30,
+        "max_upload_mb": 25,
+    }
+
+
+@app.get("/api/voices")
+def voices_list():
+    """The saved voice library (distinct from /api/tts/voices = engine voices)."""
+    lib = _library()
+    return {
+        "ok": True,
+        "voices": lib.list(),
+        "active_id": lib.active_id(),
+        "designer": _designer_options(),
+        "remix_modes": ["blend", "stitch"],
+    }
+
+
+@app.post("/api/voices/upload")
+async def voices_upload(request: Request):
+    """Add a voice from an uploaded file, a server path, or a mic recording."""
+    from agent.voice_library import decode_base64
+
+    try:
+        data = await request.json()
+    except Exception:
+        return JSONResponse({"error": "invalid JSON body"}, status_code=400)
+    name = (data.get("name") or "").strip()
+    meta = {k: data.get(k) for k in ("engine", "model", "language", "voice",
+                                     "tuning", "tags", "notes", "preview_text")}
+    # match=1 stores the recording *and* points the voice at the resident neural
+    # voice closest to it, so the clone can be heard immediately (see
+    # VoiceLibrary.create_matched). Without it, the recording is just stored.
+    want_match = bool(data.get("match"))
+    match: dict = {}
+    try:
+        lib = _library()
+        if want_match:
+            meta.pop("engine", None)             # the matcher decides the engine
+            if data.get("pcm_base64"):
+                profile, match = lib.create_matched(
+                    name, pcm=decode_base64(data["pcm_base64"], what="recording"),
+                    sample_rate=int(data.get("sample_rate") or 16000), **meta)
+            elif data.get("data_base64"):
+                profile, match = lib.create_matched(
+                    name, data=decode_base64(data["data_base64"], what="file"), **meta)
+            elif data.get("path"):
+                profile, match = lib.create_matched(name, path=data["path"].strip(), **meta)
+            else:
+                return JSONResponse(
+                    {"error": "send one of: data_base64, pcm_base64 or path"},
+                    status_code=400)
+            return {"ok": True, "voice": profile.to_dict(), "match": match}
+        if data.get("pcm_base64"):
+            profile = lib.create_from_pcm(
+                name, decode_base64(data["pcm_base64"], what="recording"),
+                int(data.get("sample_rate") or 16000), **meta)
+        elif data.get("data_base64"):
+            profile = lib.create_from_bytes(
+                name, decode_base64(data["data_base64"], what="file"),
+                data.get("filename") or "", **meta)
+        elif data.get("path"):
+            profile = lib.create_from_path(name, data["path"].strip(), **meta)
+        else:
+            return JSONResponse(
+                {"error": "send one of: data_base64 (a file), pcm_base64 "
+                          "(a mic recording) or path (a file on the server)"},
+                status_code=400)
+    except Exception as e:                                    # noqa: BLE001
+        return _voice_error(e)
+    return {"ok": True, "voice": profile.to_dict()}
+
+
+@app.post("/api/voices/match")
+async def voices_match(request: Request):
+    """Measure a recording and report which resident neural voice it matches.
+
+    Read-only: nothing is created, so the dashboard can show "your recording is
+    closest to Amy (pitch +1.3 semitones)". Send the audio as ``data_base64``
+    (file), ``pcm_base64`` (mic) or ``path`` (already on the server).
+    """
+    from agent import audio_dsp as dsp
+    from agent import neural_tts
+    from agent.voice_library import decode_base64
+
+    try:
+        data = await request.json()
+    except Exception:
+        return JSONResponse({"error": "invalid JSON body"}, status_code=400)
+    try:
+        if data.get("pcm_base64"):
+            samples, rate = dsp.load_audio(decode_base64(data["pcm_base64"], what="recording"))
+            if not rate:
+                rate = int(data.get("sample_rate") or 16000)
+        elif data.get("data_base64"):
+            samples, rate = dsp.load_audio(decode_base64(data["data_base64"], what="file"))
+        elif data.get("path"):
+            samples, rate = dsp.load_audio(data["path"].strip())
+            if len(samples) == 0:
+                raise dsp.AudioError("that file has no audio in it")
+        else:
+            return JSONResponse({"error": "send data_base64, pcm_base64 or path"},
+                                status_code=400)
+        prepared, _ = dsp.prepare_reference(samples, rate or 16000)
+        match = neural_tts.match_reference(prepared, dsp.TARGET_RATE,
+                                          language=data.get("language"))
+    except neural_tts.NeuralTTSError as e:
+        return JSONResponse({"error": str(e), "hint": "python scripts/fetch_neural_voices.py"},
+                            status_code=503)
+    except Exception as e:                                    # noqa: BLE001
+        return _voice_error(e)
+    return {"ok": True, "match": match}
+
+
+@app.post("/api/voices/describe")
+async def voices_describe(request: Request):
+    """**Prompt to voice**: turn a description into a voice.
+
+    Local neural engine (default): ``{"description": "warm older British man,
+    speaks slowly"}`` picks the resident voice that fits and stores the measured
+    tuning. ``dry_run`` returns the plan without creating anything.
+    """
+    from agent import neural_tts
+
+    try:
+        data = await request.json()
+    except Exception:
+        return JSONResponse({"error": "invalid JSON body"}, status_code=400)
+    description = (data.get("description") or data.get("prompt") or "").strip()
+    if not description:
+        return JSONResponse(
+            {"error": "describe the voice first, e.g. 'warm older British man, "
+                      "speaks slowly'",
+             "examples": ["warm older British man, speaks slowly",
+                          "young energetic American woman",
+                          "deep serious male narrator",
+                          "bright cheerful female, fast"]},
+            status_code=400)
+    try:
+        if data.get("dry_run"):
+            plan = neural_tts.design_from_text(
+                description, language=data.get("language"),
+                pitch_level=(data.get("tuning") or {}).get("pitch"),
+                speed=(data.get("tuning") or {}).get("speed"))
+            return {"ok": True, "dry_run": True, "plan": plan}
+        lib = _library()
+        profile, plan = lib.describe(
+            data.get("name") or description[:40], description,
+            language=data.get("language"), tuning=data.get("tuning"),
+            tags=data.get("tags"), notes=data.get("notes"),
+            preview_text=data.get("preview_text"))
+    except Exception as e:                                    # noqa: BLE001
+        return _voice_error(e)
+    return {"ok": True, "voice": profile.to_dict(), "plan": plan}
+
+
+@app.get("/api/voices/design/providers")
+async def voices_design_providers():
+    """Which prompt-to-voice engines are usable right now (and how to unlock them)."""
+    from agent import elevenlabs_design as el
+    from agent import neural_tts
+
+    return {"ok": True, "providers": el.providers(CONFIG),
+            "local_models": neural_tts.describe_models()}
+
+
+@app.post("/api/voices/design/elevenlabs")
+async def voices_design_elevenlabs(request: Request):
+    """ElevenLabs Voice Design: generate voices from a description, keep one.
+
+    ``{"description": "..."}`` returns playable previews. Add
+    ``{"keep": true, "generated_voice_id": "..."}`` to save the chosen one as a
+    real voice; it is then stored in the library (engine ``elevenlabs``) with a
+    rendered sample as its reference, so the local cloner/matcher can use it too.
+    """
+    from agent import elevenlabs_design as el
+
+    try:
+        data = await request.json()
+    except Exception:
+        return JSONResponse({"error": "invalid JSON body"}, status_code=400)
+    if not el.available(CONFIG):
+        return JSONResponse(
+            {"error": "Voice Design from a description needs an ElevenLabs key",
+             "hint": el.hint(),
+             "alternative": {"endpoint": "/api/voices/describe",
+                             "detail": "design a voice from the resident neural voices "
+                                       "without any key"}},
+            status_code=400)
+    try:
+        description = (data.get("description") or "").strip()
+        if not data.get("generated_voice_id"):
+            result = el.design(description, (data.get("text") or "").strip(),
+                               config=CONFIG,
+                               loudness=float(data.get("loudness") or 0.5),
+                               guidance=float(data.get("guidance") or 0.5),
+                               seed=data.get("seed"), enhance=bool(data.get("enhance", True)))
+            return {"ok": True, **result}
+        # keeping one: persist it on ElevenLabs and in the local library
+        saved = el.save(data["generated_voice_id"], data.get("name") or description[:40],
+                        description, config=CONFIG)
+        profile, info = el.save_locally(
+            saved["voice_id"], data.get("name") or saved["name"], description,
+            (data.get("text") or "").strip(), config=CONFIG, samples=_library())
+        return {"ok": True, "saved": saved, "voice": profile.to_dict(), "info": info}
+    except el.DesignUnavailable as e:
+        return JSONResponse({"error": str(e), "hint": el.hint()}, status_code=400)
+    except el.DesignError as e:
+        return JSONResponse({"error": str(e)}, status_code=502)
+    except Exception as e:                                    # noqa: BLE001
+        return _voice_error(e)
+
+
+@app.post("/api/voices/design")
+async def voices_design(request: Request):
+    """Create a voice by tuning an engine (no reference audio needed)."""
+    try:
+        data = await request.json()
+    except Exception:
+        return JSONResponse({"error": "invalid JSON body"}, status_code=400)
+    try:
+        lib = _library()
+        profile = lib.design(
+            data.get("name"), engine=data.get("engine") or "chatterbox",
+            model=data.get("model"), language=data.get("language"),
+            voice=data.get("voice"), tuning=data.get("tuning"),
+            tags=data.get("tags"), notes=data.get("notes"),
+            preview_text=data.get("preview_text"))
+    except Exception as e:                                    # noqa: BLE001
+        return _voice_error(e)
+    return {"ok": True, "voice": profile.to_dict()}
+
+
+@app.post("/api/voices/remix")
+async def voices_remix(request: Request):
+    """Blend or stitch existing voices' references into a new voice."""
+    try:
+        data = await request.json()
+    except Exception:
+        return JSONResponse({"error": "invalid JSON body"}, status_code=400)
+    try:
+        lib = _library()
+        profile = lib.remix(
+            data.get("name"), data.get("sources"), mode=data.get("mode") or "blend",
+            pitch_semitones=data.get("pitch_semitones") or 0.0,
+            match=bool(data.get("match")),
+            engine=data.get("engine"), model=data.get("model"),
+            language=data.get("language"), tuning=data.get("tuning"),
+            tags=data.get("tags"), notes=data.get("notes"))
+    except Exception as e:                                    # noqa: BLE001
+        return _voice_error(e)
+    return {"ok": True, "voice": profile.to_dict()}
+
+
+@app.post("/api/voices/current")
+async def voices_save_current(request: Request):
+    """Save whatever voice the bot is configured with right now."""
+    try:
+        data = await request.json()
+    except Exception:
+        return JSONResponse({"error": "invalid JSON body"}, status_code=400)
+    try:
+        lib = _library()
+        profile = lib.save_from_current(data.get("name"), CONFIG,
+                                        tags=data.get("tags"), notes=data.get("notes"))
+    except Exception as e:                                    # noqa: BLE001
+        return _voice_error(e)
+    return {"ok": True, "voice": profile.to_dict()}
+
+
+@app.get("/api/voices/{vid}")
+def voices_detail(vid: str):
+    from agent.voice_library import get_library  # noqa: F401  (keeps import local)
+
+    lib = _library()
+    profile = lib.find(vid)
+    if profile is None:
+        return JSONResponse({"error": f"unknown voice '{vid}'"}, status_code=404)
+    item = profile.to_dict()
+    item["active"] = lib.active_id() == vid
+    item["ref_path"] = lib.ref_path(vid)
+    return {"ok": True, "voice": item}
+
+
+@app.put("/api/voices/{vid}")
+async def voices_update(vid: str, request: Request):
+    try:
+        data = await request.json()
+    except Exception:
+        return JSONResponse({"error": "invalid JSON body"}, status_code=400)
+    try:
+        lib = _library()
+        profile = lib.update(vid, **data)
+    except Exception as e:                                    # noqa: BLE001
+        return _voice_error(e)
+    return {"ok": True, "voice": profile.to_dict()}
+
+
+@app.delete("/api/voices/{vid}")
+def voices_delete(vid: str):
+    lib = _library()
+    if not lib.delete(vid):
+        return JSONResponse({"error": f"unknown voice '{vid}'"}, status_code=404)
+    return {"ok": True, "deleted": vid}
+
+
+@app.post("/api/voices/{vid}/apply")
+async def voices_apply(vid: str):
+    """Make this voice the one the bot speaks with."""
+    from agent.tts import TTS
+
+    try:
+        lib = _library()
+        applied = lib.apply(vid, CONFIG)
+    except Exception as e:                                    # noqa: BLE001
+        return _voice_error(e)
+    # An explicit operator choice deserves a fresh attempt at the engine.
+    TTS.reset_health()
+    return {"ok": True, "applied": applied, "active_id": vid,
+            "voice": lib.get(vid).to_dict()}
+
+
+@app.post("/api/voices/{vid}/preview")
+async def voices_preview(vid: str, request: Request):
+    """Speak a phrase with this voice and return it as wav audio.
+
+    Falls back to the standby engine when the profile's own engine is not
+    runnable here (no weights, no key), so the operator always hears something —
+    the fallback is reported in the response headers.
+    """
+    body = {}
+    if request.headers.get("content-type", "").startswith("application/json"):
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+    try:
+        lib = _library()
+        profile = lib.get(vid)
+    except KeyError as e:
+        return JSONResponse({"error": f"unknown voice '{e.args[0]}'"}, status_code=404)
+
+    text = (body.get("text") or "").strip() or profile.preview_text or DEFAULT_PREVIEW_TEXT
+    if body.get("include_tags") and profile.tags:
+        text = f"{text} {' '.join(profile.tags)}"
+
+    cfg = lib.preview_config(vid, CONFIG)
+    return await _render_preview(cfg, text)
+
+
+def _draft_config(data: dict):
+    """Build a config for an unsaved voice definition (designer preview)."""
+    from dataclasses import replace
+
+    from agent.audio_dsp import AudioError
+    from agent.voice_library import clean_tags, clean_tuning, validate_engine_language
+
+    engine = (data.get("engine") or "chatterbox").strip().lower()
+    if engine not in ("chatterbox", "kokoro", "piper"):
+        raise AudioError("unknown engine '%s' — use one of: chatterbox, kokoro, piper"
+                         % engine)
+    overrides: dict = {"tts_provider": engine}
+    tuning = clean_tuning(data.get("tuning") or {})
+    if engine == "piper":
+        # The offline neural engine: pick a resident voice and pass the studio
+        # sliders through to it (pitch/speed are applied by the voice server).
+        if data.get("voice"):
+            overrides["piper_voice"] = str(data["voice"]).strip()
+        if "speed" in tuning:
+            overrides["piper_speed"] = float(tuning["speed"])
+        if "pitch" in tuning:
+            overrides["piper_pitch"] = int(tuning["pitch"])
+        if "volume" in tuning:
+            overrides["piper_volume"] = float(tuning["volume"])
+    elif engine == "chatterbox":
+        model = (data.get("model") or CONFIG.chatterbox_model or "turbo").strip()
+        language = (data.get("language") or "en").strip().lower()
+        validate_engine_language(engine, model, language)
+        overrides.update({"chatterbox_model": model, "chatterbox_language": language})
+        for key in ("exaggeration", "cfg_weight", "temperature"):
+            if key in tuning:
+                overrides[f"chatterbox_{key}"] = float(tuning[key])
+    else:
+        if data.get("voice"):
+            overrides["kokoro_voice"] = str(data["voice"]).strip()
+        if "speed" in tuning:
+            overrides["kokoro_speed"] = float(tuning["speed"])
+        if "pitch" in tuning:
+            overrides["kokoro_pitch"] = int(tuning["pitch"])
+    return replace(CONFIG, **overrides), tuning, clean_tags(data.get("tags"))
+
+
+async def _render_preview(cfg, text: str):
+    """Speak `text` with `cfg`, falling back to the standby engine if it fails.
+
+    The operator must always hear something: if the profile's own engine cannot
+    run on this machine (no weights, no key) the standby speaks instead and the
+    response headers say which engine and whether it was a fallback.
+    """
+    from dataclasses import replace
+
+    from agent.tts import LOCAL_HTTP_PROVIDERS, TTS, wav_from_pcm16
+
+    #: what the *profile* asked for, kept separate from the engine a given attempt
+    #: uses — the operator cares "I asked ChatterBox, piper spoke", not the internals
+    requested_engine = str(cfg.tts_provider)
+    attempts = [("profile", cfg)]
+    # Order of the fallbacks: the configured standby first, then any other local
+    # server that is actually answering. That last part matters because the
+    # standby *can* be the same engine the profile asks for (apply() swaps the two
+    # slots around), and a machine without ChatterBox weights or an API key should
+    # still let the operator hear the voice — labelled as a fallback, never passed
+    # off as the profile's own engine.
+    order: "list[str]" = []
+    standby = (CONFIG.tts_standby_provider or "").strip().lower()
+    if standby:
+        order.append(standby)
+    order.extend(name for name in LOCAL_HTTP_PROVIDERS if name not in order)
+    seen = {cfg.tts_provider}
+    for name in order:
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        if name in LOCAL_HTTP_PROVIDERS:
+            try:
+                if not TTS(replace(cfg, tts_provider=name)).probe_local(name):
+                    continue             # not running: do not make the user wait on it
+            except Exception:            # noqa: BLE001 - a probe must never block a preview
+                pass
+        attempts.append(("standby", replace(cfg, tts_provider=name)))
+    problems = []
+    for label, attempt_cfg in attempts:
+        try:
+            tts = TTS(attempt_cfg)
+            audio = b"".join([c async for c in tts.synthesize_stream_pcm(text)])
+            if not audio:
+                raise RuntimeError("the engine returned no audio")
+        except Exception as e:                                  # noqa: BLE001
+            problems.append(f"{attempt_cfg.tts_provider}: {e}")
+            continue
+        # The engine has its own failover chain, so the engine that *actually*
+        # spoke can differ from the one we asked for. Report the truth rather
+        # than labelling standby audio as the profile's own voice.
+        used = tts.active
+        # Prefer what the server itself reported (X-Voice-Engine): the provider
+        # nicknames "kokoro" and "piper" can point at the same URL, and only the
+        # server knows which model actually produced the audio.
+        reported = (getattr(tts, "engine_reported", "") or "").strip() or str(used)
+        reason = (tts.status().get("failover_reason") or "")[:180]
+        mode = label if used == attempt_cfg.tts_provider else "standby"
+        headers = {"X-Voice-Engine": reported, "X-Voice-Mode": mode,
+                   "X-Voice-Requested": requested_engine,
+                   "X-Voice-Fallback": "0" if mode == "profile" else "1"}
+        model = (getattr(tts, "model_reported", "") or "").strip()
+        if model:
+            headers["X-Voice-Model"] = model
+        if reason:
+            headers["X-Voice-Note"] = "".join(c if 32 <= ord(c) < 127 else " "
+                                              for c in reason)
+        return Response(content=wav_from_pcm16(audio), media_type="audio/wav",
+                        headers=headers)
+    return JSONResponse(
+        {"error": "could not render this voice: " + " | ".join(problems),
+         "hint": "install the engine (pip install chatterbox-tts) or set "
+                 "TTS_STANDBY_PROVIDER to a running local voice server"},
+        status_code=502)
+
+
+@app.post("/api/voices/preview-draft")
+async def voices_preview_draft(request: Request):
+    """Preview a voice that has not been saved yet (the designer's preview button)."""
+    try:
+        data = await request.json()
+    except Exception:
+        return JSONResponse({"error": "invalid JSON body"}, status_code=400)
+    text = (data.get("text") or "").strip() or DEFAULT_PREVIEW_TEXT
+    try:
+        cfg, _tuning, tags = _draft_config(data)
+    except Exception as e:                                        # noqa: BLE001
+        return _voice_error(e)
+    if data.get("include_tags") and tags:
+        text = f"{text} {' '.join(tags)}"
+    return await _render_preview(cfg, text)
 
 
 @app.get("/api/debug/voice")
@@ -384,24 +1136,36 @@ def debug_voice_status():
     from agent.tts import TTS
 
     tts = TTS(CONFIG)
+    mic = bool(CONFIG.stt_provider == "deepgram" and CONFIG.deepgram_api_key)
+    # Every engine the live voice socket can drive. The socket needs a mic only
+    # when the caller is speaking into it, so a missing Deepgram key is a *mic*
+    # problem, not a "this voice cannot work" problem — which is why the warning
+    # below names the piece that is actually missing instead of blaming keys in
+    # general (that message used to appear even with a working local voice).
+    realtime = bool(tts.active in ("elevenlabs", "kokoro", "piper", "chatterbox") and mic)
+    warning = ""
+    if not realtime:
+        if tts.active in ("", "console"):
+            warning = ("no voice engine selected — set TTS_PROVIDER=piper "
+                       "(local neural voices, no key) or add a cloud key")
+        elif not mic:
+            warning = (f"mic input needs STT_PROVIDER=deepgram + DEEPGRAM_API_KEY — "
+                       f"the voice engine ({tts.active}) is ready")
     return {
         "speak": bool(tts.active and tts.active != "console"),
-        "mic": bool(CONFIG.stt_provider == "deepgram" and CONFIG.deepgram_api_key),
+        "mic": mic,
         "tts_provider": tts.active,
         "tts_primary": tts.primary,
         "tts_standby": tts.standby,
         "tts_failover_reason": tts.failover_reason,
         "stt_provider": CONFIG.stt_provider,
-        "voice": (CONFIG.elevenlabs_voice if tts.active == "elevenlabs" 
-                 else CONFIG.kokoro_voice if tts.active == "kokoro"
-                 else f"ChatterBox/{CONFIG.chatterbox_model}" if tts.active == "chatterbox"
-                 else "—"),
+        "voice": (CONFIG.elevenlabs_voice if tts.active == "elevenlabs"
+                  else (CONFIG.piper_voice or CONFIG.piper_model) if tts.active == "piper"
+                  else f"ChatterBox/{CONFIG.chatterbox_model}" if tts.active == "chatterbox"
+                  else CONFIG.kokoro_voice),
         "llm": CONFIG.llm_provider,
-        "realtime": bool(
-            tts.active in ("elevenlabs", "kokoro", "chatterbox")
-            and CONFIG.stt_provider == "deepgram"
-            and CONFIG.deepgram_api_key
-        ),
+        "realtime": realtime,
+        "warning": warning,
     }
 
 
@@ -666,6 +1430,11 @@ async def ws_voice(websocket: WebSocket):
     Supports barge-in: the customer can interrupt the bot mid-sentence and it
     stops talking instantly, then listens to what they said.
     """
+    if not _ws_authorised(websocket):
+        # 4401 = unauthorised (custom close code, mirrors HTTP 401)
+        await websocket.close(code=4401)
+        return
+
     await websocket.accept()
 
     async def send(payload: dict):
@@ -753,6 +1522,536 @@ a{color:#38bdf8}.meta{display:flex;gap:2rem;margin:1rem 0;flex-wrap:wrap}
 <h2 style="margin-top:1.6rem;color:#38bdf8;font-size:1rem">&#127909; Call recordings <a href="#" onclick="loadRecs();return false;" style="font-size:.75rem;font-weight:400">&#8635; refresh</a></h2>
 <p style="color:#64748b;font-size:.85rem;margin:.2rem 0 0">Every call is saved automatically — the full mixed audio (caller + Lina) plus the transcript.</p>
 <div id="recordings">Loading…</div>
+<h2 style="margin-top:1.6rem;color:#38bdf8;font-size:1rem">&#127897; Voice studio <a href="#" onclick="vsLoad();return false;" style="font-size:.75rem;font-weight:400">&#8635; refresh</a></h2>
+<p style="color:#64748b;font-size:.85rem;margin:.2rem 0 .6rem">Save, design and remix voices. A saved voice keeps its engine, model, language, clone reference and tuning — press <b>Use</b> to make the bot speak with it.</p>
+<div id="vsPanel" style="background:#1e293b;border:1px solid #334155;border-radius:.5rem;padding:1rem;margin:.6rem 0 1.4rem">
+<div style="display:flex;gap:.5rem;flex-wrap:wrap;margin-bottom:.8rem">
+<button id="vsTabLib" class="vsTab" onclick="vsTab('lib')" style="background:#0e7490;color:#fff;border:0;border-radius:.4rem;padding:.4rem .9rem;font-weight:600;cursor:pointer;font-size:.82rem">&#128218; Library</button>
+<button id="vsTabAdd" class="vsTab" onclick="vsTab('add')" style="background:#334155;color:#e2e8f0;border:0;border-radius:.4rem;padding:.4rem .9rem;font-weight:600;cursor:pointer;font-size:.82rem">&#10133; Add voice</button>
+<button id="vsTabDesign" class="vsTab" onclick="vsTab('design')" style="background:#334155;color:#e2e8f0;border:0;border-radius:.4rem;padding:.4rem .9rem;font-weight:600;cursor:pointer;font-size:.82rem">&#127912; Design</button>
+<button id="vsTabRemix" class="vsTab" onclick="vsTab('remix')" style="background:#334155;color:#e2e8f0;border:0;border-radius:.4rem;padding:.4rem .9rem;font-weight:600;cursor:pointer;font-size:.82rem">&#127925; Remix</button>
+<button id="vsTabSay" class="vsTab" onclick="vsTab('say')" style="background:#334155;color:#e2e8f0;border:0;border-radius:.4rem;padding:.4rem .9rem;font-weight:600;cursor:pointer;font-size:.82rem">&#128266; Test line</button>
+</div>
+
+<!-- ---------------- library ---------------- -->
+<div id="vsLib">
+<div id="vsGrid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:.6rem">Loading&hellip;</div>
+<div style="display:flex;gap:.5rem;flex-wrap:wrap;align-items:center;margin-top:.8rem">
+<label style="font-size:.7rem;color:#64748b;text-transform:uppercase">Save current voice as</label>
+<input id="vsSaveName" placeholder="Lina — warm" style="flex:1;min-width:160px;background:#0f172a;color:#e2e8f0;border:1px solid #334155;border-radius:.4rem;padding:.4rem .6rem;font-size:.85rem">
+<button onclick="vsSaveCurrent()" style="background:#0e7490;color:#fff;border:0;border-radius:.4rem;padding:.45rem 1rem;font-weight:600;cursor:pointer;font-size:.82rem">Save</button>
+</div>
+</div>
+
+<!-- ---------------- add ---------------- -->
+<div id="vsAdd" hidden>
+<div style="display:flex;gap:.5rem;flex-wrap:wrap;align-items:center;margin-bottom:.5rem">
+<label style="font-size:.7rem;color:#64748b;text-transform:uppercase">Name</label>
+<input id="vsAddName" placeholder="My cloned voice" style="flex:1;min-width:180px;background:#0f172a;color:#e2e8f0;border:1px solid #334155;border-radius:.4rem;padding:.4rem .6rem;font-size:.85rem">
+<label style="font-size:.7rem;color:#64748b;text-transform:uppercase">Engine</label>
+<select id="vsAddEngine" style="background:#0f172a;color:#e2e8f0;border:1px solid #334155;border-radius:.4rem;padding:.4rem .5rem;font-size:.82rem"><option value="chatterbox">ChatterBox</option><option value="kokoro">Local server</option><option value="piper">Local neural (Piper)</option></select>
+</div>
+<div style="display:flex;gap:.6rem;flex-wrap:wrap;align-items:center;margin-bottom:.5rem;background:#0b1220;border:1px solid #1e3a8a;border-radius:.45rem;padding:.45rem .6rem">
+<label style="font-size:.78rem;color:#93c5fd;display:flex;gap:.35rem;align-items:center;cursor:pointer">
+<input type="checkbox" id="vsMatch" checked> Render on a neural voice (hear it straight away)</label>
+<button onclick="vsCheckMatch()" style="background:#334155;color:#fff;border:0;border-radius:.4rem;padding:.3rem .7rem;font-weight:600;cursor:pointer;font-size:.75rem">Check match</button>
+<span id="vsMatchOut" style="font-size:.74rem;color:#94a3b8"></span>
+</div>
+<div style="display:flex;gap:.5rem;flex-wrap:wrap;align-items:center;margin-bottom:.5rem">
+<span style="font-size:.7rem;color:#64748b;text-transform:uppercase;min-width:5.5rem">1. Upload file</span>
+<input type="file" id="vsFile" accept=".wav,.flac,.ogg,.mp3,.m4a,.aiff" style="font-size:.8rem;color:#94a3b8">
+<button onclick="vsUploadFile()" style="background:#0e7490;color:#fff;border:0;border-radius:.4rem;padding:.4rem .9rem;font-weight:600;cursor:pointer;font-size:.8rem">Add from file</button>
+</div>
+<div style="display:flex;gap:.5rem;flex-wrap:wrap;align-items:center;margin-bottom:.5rem">
+<span style="font-size:.7rem;color:#64748b;text-transform:uppercase;min-width:5.5rem">2. Server path</span>
+<input id="vsPath" placeholder="C:/voices/agent_ref.wav" style="flex:1;min-width:200px;background:#0f172a;color:#e2e8f0;border:1px solid #334155;border-radius:.4rem;padding:.4rem .6rem;font-size:.85rem">
+<button onclick="vsImportPath()" style="background:#0e7490;color:#fff;border:0;border-radius:.4rem;padding:.4rem .9rem;font-weight:600;cursor:pointer;font-size:.8rem">Import</button>
+</div>
+<div style="display:flex;gap:.5rem;flex-wrap:wrap;align-items:center">
+<span style="font-size:.7rem;color:#64748b;text-transform:uppercase;min-width:5.5rem">3. Record mic</span>
+<select id="vsRecSecs" style="background:#0f172a;color:#e2e8f0;border:1px solid #334155;border-radius:.4rem;padding:.4rem .5rem;font-size:.82rem"><option>8</option><option selected>12</option><option>15</option><option>20</option></select>
+<button id="vsRecBtn" onclick="vsRecord()" style="background:#b91c1c;color:#fff;border:0;border-radius:.4rem;padding:.4rem .9rem;font-weight:600;cursor:pointer;font-size:.8rem">&#9210; Record &amp; add</button>
+<span id="vsRecMeter" style="font-size:.75rem;color:#94a3b8"></span>
+</div>
+<p style="font-size:.75rem;color:#64748b;margin:.6rem 0 0">Tips: 10-15 s of clean speech, one speaker, no music. Files are trimmed, levelled and converted to mono 24 kHz automatically. Compressed formats (mp3/ogg/flac) need <code>pip install soundfile</code>.</p>
+</div>
+
+<!-- ---------------- design ---------------- -->
+<div id="vsDesign" hidden>
+<div style="background:#0b1220;border:1px solid #1e3a8a;border-radius:.45rem;padding:.6rem;margin-bottom:.7rem">
+<div style="font-size:.78rem;color:#93c5fd;font-weight:600;margin-bottom:.35rem">Describe a voice &mdash; prompt to voice</div>
+<div style="display:flex;gap:.5rem;flex-wrap:wrap;align-items:center">
+<input id="vdDescribe" placeholder="warm older British man, speaks slowly" style="flex:1;min-width:230px;background:#0f172a;color:#e2e8f0;border:1px solid #334155;border-radius:.4rem;padding:.45rem .6rem;font-size:.85rem">
+<select id="vdProvider" style="background:#0f172a;color:#e2e8f0;border:1px solid #334155;border-radius:.4rem;padding:.4rem .5rem;font-size:.82rem"></select>
+<button onclick="vdDescribeGo(true)" style="background:#334155;color:#fff;border:0;border-radius:.4rem;padding:.45rem .9rem;font-weight:600;cursor:pointer;font-size:.8rem">Try (no save)</button>
+<button onclick="vdDescribeGo(false)" style="background:#7c3aed;color:#fff;border:0;border-radius:.4rem;padding:.45rem 1rem;font-weight:600;cursor:pointer;font-size:.8rem">&#10024; Create voice</button>
+</div>
+<div id="vdDescribeOut" style="font-size:.76rem;color:#94a3b8;margin-top:.4rem;min-height:1em"></div>
+<div id="vdPreviews" style="display:flex;gap:.5rem;flex-wrap:wrap;margin-top:.4rem"></div>
+</div>
+<div style="display:flex;gap:.5rem;flex-wrap:wrap;align-items:center;margin-bottom:.5rem">
+<label style="font-size:.7rem;color:#64748b;text-transform:uppercase">Name</label>
+<input id="vdName" placeholder="Upbeat closer" style="flex:1;min-width:160px;background:#0f172a;color:#e2e8f0;border:1px solid #334155;border-radius:.4rem;padding:.4rem .6rem;font-size:.85rem">
+<label style="font-size:.7rem;color:#64748b;text-transform:uppercase">Preset</label>
+<select id="vdPreset" onchange="vdApplyPreset()" style="background:#0f172a;color:#e2e8f0;border:1px solid #334155;border-radius:.4rem;padding:.4rem .5rem;font-size:.82rem"></select>
+</div>
+<div id="vdControls" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:.5rem .9rem;margin-bottom:.6rem"></div>
+<div style="display:flex;gap:.5rem;flex-wrap:wrap;align-items:center;margin-bottom:.5rem">
+<label style="font-size:.7rem;color:#64748b;text-transform:uppercase">Tags</label>
+<div id="vdTags" style="display:flex;gap:.35rem;flex-wrap:wrap"></div>
+</div>
+<div style="display:flex;gap:.5rem;flex-wrap:wrap">
+<button onclick="vdPreview()" style="background:#334155;color:#fff;border:0;border-radius:.4rem;padding:.45rem 1rem;font-weight:600;cursor:pointer;font-size:.82rem">&#9654; Preview</button>
+<button onclick="vdSave()" style="background:#0e7490;color:#fff;border:0;border-radius:.4rem;padding:.45rem 1rem;font-weight:600;cursor:pointer;font-size:.82rem">Save to library</button>
+</div>
+</div>
+
+<!-- ---------------- remix ---------------- -->
+<div id="vsRemix" hidden>
+<p style="font-size:.78rem;color:#94a3b8;margin:.1rem 0 .5rem">Pick two or more saved voices and mix them into a new one. <b>Blend</b> averages the timbres (weights matter), <b>stitch</b> joins them end to end.</p>
+<div id="vrSources" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:.4rem;margin-bottom:.6rem"></div>
+<div style="display:flex;gap:.5rem;flex-wrap:wrap;align-items:center;margin-bottom:.5rem">
+<label style="font-size:.7rem;color:#64748b;text-transform:uppercase">Name</label>
+<input id="vrName" placeholder="Blended voice" style="flex:1;min-width:150px;background:#0f172a;color:#e2e8f0;border:1px solid #334155;border-radius:.4rem;padding:.4rem .6rem;font-size:.85rem">
+<label style="font-size:.7rem;color:#64748b;text-transform:uppercase">Mode</label>
+<select id="vrMode" style="background:#0f172a;color:#e2e8f0;border:1px solid #334155;border-radius:.4rem;padding:.4rem .5rem;font-size:.82rem"><option value="blend">Blend (mix)</option><option value="stitch">Stitch (join)</option></select>
+<label style="font-size:.7rem;color:#64748b;text-transform:uppercase">Pitch</label>
+<input id="vrPitch" type="number" step="0.5" min="-12" max="12" value="0" title="Shifts pitch and pace together (reference only)" style="width:5rem;background:#0f172a;color:#e2e8f0;border:1px solid #334155;border-radius:.4rem;padding:.4rem .5rem;font-size:.82rem">
+<label style="font-size:.76rem;color:#93c5fd;display:flex;gap:.35rem;align-items:center;cursor:pointer">
+<input type="checkbox" id="vrNeural" checked> Render on a neural voice</label>
+<button onclick="vrSave()" style="background:#0e7490;color:#fff;border:0;border-radius:.4rem;padding:.45rem 1rem;font-weight:600;cursor:pointer;font-size:.82rem">Remix &amp; save</button>
+</div>
+</div>
+
+<!-- ---------------- test line ---------------- -->
+<div id="vsSay" hidden>
+<div style="display:flex;gap:.5rem;flex-wrap:wrap;align-items:center">
+<select id="vsSayVoice" style="background:#0f172a;color:#e2e8f0;border:1px solid #334155;border-radius:.4rem;padding:.4rem .5rem;font-size:.82rem;min-width:170px"></select>
+<input id="vsSayText" value="Hello, this is Lina from Medicare Marketplace. How can I help you today?" style="flex:1;min-width:220px;background:#0f172a;color:#e2e8f0;border:1px solid #334155;border-radius:.4rem;padding:.45rem .6rem;font-size:.85rem">
+<label style="font-size:.72rem;color:#94a3b8"><input type="checkbox" id="vsSayTags"> include tags</label>
+<button onclick="vsSay()" style="background:#16a34a;color:#fff;border:0;border-radius:.4rem;padding:.45rem 1.1rem;font-weight:700;cursor:pointer;font-size:.82rem">&#128266; Speak</button>
+</div>
+</div>
+
+<audio id="vsAudio" controls preload="none" style="width:100%;margin-top:.7rem"></audio>
+<div id="vsMsg" style="font-size:.8rem;margin-top:.4rem;min-height:1.2em;color:#7dd3fc"></div>
+</div>
+<script>
+let VS={voices:[],active:'',designer:{},remixModes:['blend','stitch']};
+function vsSay(msg,color){const m=document.getElementById('vsMsg');m.textContent=msg;m.style.color=color||'#7dd3fc';}
+function vsTab(which){
+ ['lib','add','design','remix','say'].forEach(k=>{
+  document.getElementById('vs'+k[0].toUpperCase()+k.slice(1)).hidden=(k!==which);
+  const b=document.getElementById('vsTab'+k[0].toUpperCase()+k.slice(1));
+  b.style.background=(k===which)?'#0e7490':'#334155';});
+}
+const VS_TUNE=[['exaggeration','Expressiveness',0,1,0.05],['cfg_weight','Guidance',0,1,0.05],
+ ['temperature','Variation',0.05,2,0.05],['speed','Pace',0.5,2,0.05],['pitch','Pitch',0,99,1]];
+function vsEsc(s){return String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+async function vsLoad(){
+ try{
+  const r=await fetch('/api/voices'); const d=await r.json();
+  VS.voices=d.voices||[]; VS.active=d.active_id||''; VS.designer=d.designer||{}; VS.remixModes=d.remix_modes||VS.remixModes;
+  vsRenderGrid(); vsFillSelectors(); vsBuildDesigner();
+  const grid=document.getElementById('vsGrid');
+  if(grid && !grid.dataset.bound){grid.addEventListener('click',vsCardClick);grid.dataset.bound='1';}
+  const n=VS.voices.length;
+  vsSay(n?('Library: '+n+' voice'+(n===1?'':'s')+(VS.active?' — active: '+vsName(VS.active):'')):'Library is empty — add, design or remix a voice.');
+ }catch(e){vsSay('Could not load the library: '+e,'#fecaca');}}
+function vsName(id){const v=VS.voices.find(x=>x.id===id);return v?v.name:id;}
+function vsRenderGrid(){
+ const g=document.getElementById('vsGrid');
+ if(!VS.voices.length){g.innerHTML='<div style="color:#64748b;font-size:.85rem">No voices yet.</div>';return;}
+ g.innerHTML=VS.voices.map(v=>{
+  const t=Object.entries(v.tuning||{}).map(([k,x])=>k+' '+x).join(', ');
+  return '<div style="background:#0f172a;border:1px solid '+(v.active?'#22c55e':'#334155')+';border-radius:.5rem;padding:.6rem">'
+   +'<div style="display:flex;justify-content:space-between;gap:.4rem;align-items:start">'
+   +'<b style="font-size:.85rem;color:#e2e8f0">'+vsEsc(v.name)+'</b>'
+   +(v.active?'<span style="font-size:.62rem;background:#166534;color:#dcfce7;border-radius:1rem;padding:.1rem .45rem">ACTIVE</span>':'')
+   +'</div>'
+   +'<div style="font-size:.72rem;color:#94a3b8;margin:.25rem 0">'+vsEsc(v.engine)+(v.model?' / '+vsEsc(v.model):'')+(v.language?' / '+vsEsc(v.language):'')
+   +(v.has_reference?' / clone '+(v.duration_sec||0)+'s':' / built-in')+'</div>'
+   +(t?'<div style="font-size:.7rem;color:#64748b">'+vsEsc(t)+'</div>':'')
+   +(v.notes?'<div style="font-size:.7rem;color:#64748b;font-style:italic">'+vsEsc(v.notes)+'</div>':'')
+   +'<div data-id="'+v.id+'" style="display:flex;gap:.35rem;flex-wrap:wrap;margin-top:.5rem">'
+   +'<button data-act="preview" style="background:#334155;color:#e2e8f0;border:0;border-radius:.35rem;padding:.25rem .6rem;font-size:.72rem;cursor:pointer">&#9654; Preview</button>'
+   +'<button data-act="apply" style="background:#0e7490;color:#fff;border:0;border-radius:.35rem;padding:.25rem .6rem;font-size:.72rem;cursor:pointer">Use</button>'
+   +'<button data-act="rename" style="background:#334155;color:#e2e8f0;border:0;border-radius:.35rem;padding:.25rem .6rem;font-size:.72rem;cursor:pointer">Rename</button>'
+   +'<button data-act="delete" style="background:#7f1d1d;color:#fee2e2;border:0;border-radius:.35rem;padding:.25rem .6rem;font-size:.72rem;cursor:pointer">Delete</button>'
+   +'</div></div>';}).join('');
+}
+function vsCardClick(ev){
+ const btn=ev.target.closest('button[data-act]'); if(!btn)return;
+ const card=btn.closest('[data-id]'); if(!card)return;
+ const id=card.dataset.id, act=btn.dataset.act;
+ if(act==='preview')vsPreview(id);
+ else if(act==='apply')vsApply(id);
+ else if(act==='rename')vsRename(id);
+ else if(act==='delete')vsDelete(id);
+}
+function vsFillSelectors(){
+ const opts=VS.voices.map(v=>'<option value="'+v.id+'">'+vsEsc(v.name)+'</option>').join('');
+ document.getElementById('vsSayVoice').innerHTML=opts||'<option value="">(no voices)</option>';
+ if(VS.active)document.getElementById('vsSayVoice').value=VS.active;
+ document.getElementById('vrSources').innerHTML=VS.voices.length?VS.voices.map(v=>
+  '<label style="display:flex;gap:.4rem;align-items:center;font-size:.78rem;color:#cbd5e1;background:#0f172a;border:1px solid #334155;border-radius:.4rem;padding:.3rem .5rem">'
+  +'<input type="checkbox" class="vrPick" value="'+v.id+'"'+(v.has_reference?'':' disabled title="no reference audio"')+'>'
+  +vsEsc(v.name)+(v.has_reference?'':' <span style="color:#64748b">(built-in)</span>')
+  +'<input type="number" class="vrW" value="1" min="0" step="0.5" style="width:3.4rem;margin-left:auto;background:#1e293b;color:#e2e8f0;border:1px solid #334155;border-radius:.3rem;padding:.1rem .3rem;font-size:.72rem"></label>').join('')
+  :'<span style="font-size:.8rem;color:#64748b">Save a voice with a reference first.</span>';
+}
+function vsBuildDesigner(){
+ const d=VS.designer;
+ document.getElementById('vdPreset').innerHTML='<option value="">— custom —</option>'
+  +(d.presets||[]).map(p=>'<option value="'+p.id+'">'+vsEsc(p.name)+'</option>').join('');
+ const provEl=document.getElementById('vdProvider');
+ if(provEl){provEl.innerHTML=vdProviderOptions();
+  provEl.onchange=()=>{const p=(VS.designer.design_providers||[]).find(x=>x.id===provEl.value);
+   const o=document.getElementById('vdDescribeOut');
+   if(o)o.textContent=(p&&p.detail)||'';};}
+ const voices=(d.backend_voices||[]);
+ document.getElementById('vdControls').innerHTML=[
+  '<label style="font-size:.72rem;color:#94a3b8">Engine<select id="vdEngine" style="width:100%;background:#0f172a;color:#e2e8f0;border:1px solid #334155;border-radius:.4rem;padding:.35rem">'
+   +'<option value="chatterbox">ChatterBox</option><option value="kokoro">Local server (kokoro)</option>'
+   +'<option value="piper">Local neural voices (Piper)</option></select></label>',
+  '<label style="font-size:.72rem;color:#94a3b8">Model<select id="vdModel" style="width:100%;background:#0f172a;color:#e2e8f0;border:1px solid #334155;border-radius:.4rem;padding:.35rem">'
+   +(d.chatterbox_models||[]).map(m=>'<option value="'+m+'">'+m+'</option>').join('')+'</select></label>',
+  '<label style="font-size:.72rem;color:#94a3b8">Language<select id="vdLanguage" style="width:100%;background:#0f172a;color:#e2e8f0;border:1px solid #334155;border-radius:.4rem;padding:.35rem">'
+   +Object.entries(d.chatterbox_languages||{}).map(([k,v])=>'<option value="'+k+'">'+k+' — '+vsEsc(v)+'</option>').join('')+'</select></label>',
+  '<label style="font-size:.72rem;color:#94a3b8">Backend voice<select id="vdVoice" style="width:100%;background:#0f172a;color:#e2e8f0;border:1px solid #334155;border-radius:.4rem;padding:.35rem">'
+   +vsVoiceOptions()+'</select></label>',
+ ].join('')+VS_TUNE.map(([k,label,lo,hi,step])=>
+  '<label style="font-size:.72rem;color:#94a3b8">'+label+' <span id="vdv_'+k+'" style="color:#7dd3fc"></span>'
+  +'<input id="vd_'+k+'" data-tune="'+k+'" type="range" min="'+lo+'" max="'+hi+'" step="'+step+'" style="width:100%"></label>').join('');
+ document.getElementById('vdControls').oninput=ev=>{
+  const key=ev.target.dataset?ev.target.dataset.tune:null; if(!key)return;
+  const lbl=document.getElementById('vdv_'+key); if(lbl)lbl.textContent=ev.target.value;};
+ document.getElementById('vdTags').innerHTML=(d.chatterbox_tags||[]).map(t=>
+  '<span data-tag="'+t+'" style="background:#334155;padding:.2rem .5rem;border-radius:1rem;font-size:.72rem;cursor:pointer;font-family:monospace">'+t+'</span>').join('')
+  +'<input id="vdTagList" placeholder="[laugh] [sigh]" style="background:#0f172a;color:#e2e8f0;border:1px solid #334155;border-radius:.4rem;padding:.3rem .5rem;font-size:.78rem;min-width:11rem">';
+ const dflt=Object.fromEntries(VS_TUNE.map(([k,,lo])=>[k,lo]));
+ Object.entries(dflt).forEach(([k,v])=>{const el=document.getElementById('vd_'+k);if(el){el.value=v;document.getElementById('vdv_'+k).textContent=v;}});
+ document.getElementById('vdEngine').onchange=vdEngineSwap;
+ document.getElementById('vdTags').addEventListener('click',ev=>{
+  const t=ev.target.dataset?ev.target.dataset.tag:null; if(!t)return;
+  const box=document.getElementById('vdTagList');
+  box.value=(box.value?box.value+' ':'' )+t; box.focus();});
+ vdEngineSwap();
+}
+function vsVoiceOptions(){
+ const d=VS.designer||{};
+ const engine=document.getElementById('vdEngine').value;
+ if(engine==='piper'){
+  const nv=d.neural_voices||[];
+  if(!nv.length)return '<option value="">(no local voices — run scripts/fetch_neural_voices.py)</option>';
+  return nv.map(v=>'<option value="'+v.id+'">'+vsEsc(v.name||v.id)
+   +(v.f0_hz?' — '+Math.round(v.f0_hz)+' Hz':'')+'</option>').join('');
+ }
+ const voices=(d.backend_voices||[]);
+ return voices.length?voices.map(v=>'<option value="'+v.id+'">'+vsEsc(v.name||v.id)+'</option>').join('')
+  :'<option value="af_bella">af_bella</option>';
+}
+function vdEngineSwap(){
+ const engine=document.getElementById('vdEngine').value, isCb=engine==='chatterbox';
+ document.getElementById('vdModel').parentElement.style.display=isCb?'':'none';
+ document.getElementById('vdLanguage').parentElement.style.display=isCb?'':'none';
+ document.getElementById('vdVoice').parentElement.style.display=isCb?'none':'';
+ const sel=document.getElementById('vdVoice');
+ if(!isCb&&sel){
+  const keep=sel.value; sel.innerHTML=vsVoiceOptions();
+  if(keep&&[...sel.options].some(o=>o.value===keep))sel.value=keep;
+ }
+}
+function vdProviderOptions(){
+ const d=VS.designer||{}, ps=d.design_providers||[];
+ if(!ps.length)return '<option value="local">Local neural voices</option>';
+ return ps.map(p=>'<option value="'+p.id+'"'+(p.available?'':' disabled')+'>'
+  +vsEsc(p.name||p.id)+(p.available?'':' — needs a key')+'</option>').join('');
+}
+async function vdDescribeGo(dry){
+ const description=document.getElementById('vdDescribe').value.trim();
+ const out=document.getElementById('vdDescribeOut');
+ if(!description){out.textContent='Describe the voice you want, e.g. "warm older British man, speaks slowly".';return;}
+ const provider=document.getElementById('vdProvider').value;
+ const name=document.getElementById('vdName').value.trim()||description.slice(0,40);
+ out.textContent=(dry?'Measuring which voice fits…':'Creating the voice…');
+ try{
+  if(provider==='elevenlabs'){
+   const r=await fetch('/api/voices/design/elevenlabs',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({description,name,text:vsText()})});
+   const d=await r.json();
+   if(!r.ok||d.error){out.textContent=d.error+(d.hint?' — '+d.hint:'');return;}
+   const box=document.getElementById('vdPreviews'); box.innerHTML='';
+   (d.previews||[]).forEach((p,i)=>{
+    const card=document.createElement('div');
+    card.style.cssText='display:flex;gap:.4rem;align-items:center;background:#0f172a;border:1px solid #334155;border-radius:.4rem;padding:.35rem .5rem';
+    const au=document.createElement('audio'); au.controls=true; au.style.height='2rem';
+    au.src='data:'+(p.media_type||'audio/mpeg')+';base64,'+p.audio_base64;
+    const btn=document.createElement('button');
+    btn.textContent='Keep #'+(i+1);
+    btn.style.cssText='background:#7c3aed;color:#fff;border:0;border-radius:.4rem;padding:.3rem .7rem;font-weight:600;cursor:pointer;font-size:.75rem';
+    btn.onclick=()=>vdKeepPreview(p.generated_voice_id,name,description);
+    card.appendChild(au); card.appendChild(btn); box.appendChild(card);
+   });
+   out.textContent='Generated '+((d.previews||[]).length)+' candidate voice(s) — listen and press Keep.';
+   return;
+  }
+  const r=await fetch('/api/voices/describe',{method:'POST',headers:{'Content-Type':'application/json'},
+   body:JSON.stringify({description,name,dry_run:dry,tuning:null,tags:document.getElementById('vdTagList')?document.getElementById('vdTagList').value:''})});
+  const d=await r.json();
+  if(!r.ok||d.error){out.textContent=d.error;return;}
+  const plan=d.plan||{};
+  out.innerHTML='<b>'+vsEsc(plan.model_name||plan.model||'')+'</b> · pitch '+plan.pitch_level+'/99 · speed '
+   +(plan.speed||1).toFixed(2)+'x · mood '+vsEsc(plan.mood||'')+'<br><span style="color:#64748b">'+vsEsc(plan.why||'')+'</span>';
+  if(d.voice){
+   vsSay('Created "'+d.voice.name+'" from your description. Playing it…','#86efac');
+   document.getElementById('vdName').value=''; document.getElementById('vdDescribe').value='';
+   await vsLoad();
+   vsPreview(d.voice.id);
+  }
+ }catch(e){out.textContent='Could not design that voice: '+e.message;}
+}
+async function vdKeepPreview(preview_id,name,description){
+ try{
+  const r=await fetch('/api/voices/design/elevenlabs',{method:'POST',headers:{'Content-Type':'application/json'},
+   body:JSON.stringify({description,name,generated_voice_id:preview_id,text:vsText()})});
+  const d=await r.json();
+  if(!r.ok||d.error)throw new Error(d.error||('HTTP '+r.status));
+  vsSay('Saved "'+d.voice.name+'" (ElevenLabs '+d.info.voice_id+') to the library.','#86efac');
+  document.getElementById('vdPreviews').innerHTML=''; await vsLoad();
+ }catch(e){vsSay('Could not keep that voice: '+e.message,'#fecaca');}
+}
+function vdApplyPreset(){
+ const p=(VS.designer.presets||[]).find(x=>x.id===document.getElementById('vdPreset').value);
+ if(!p)return;
+ Object.entries(p.tuning||{}).forEach(([k,v])=>{
+  const el=document.getElementById('vd_'+k); if(!el)return;
+  el.value=v; const lbl=document.getElementById('vdv_'+k); if(lbl)lbl.textContent=v;});
+ vsSay('Preset applied: '+p.name);
+}
+function vdCollect(){
+ const num=id=>{const el=document.getElementById(id);return el?parseFloat(el.value):undefined;};
+ const tuning={exaggeration:num('vd_exaggeration'),cfg_weight:num('vd_cfg_weight'),
+  temperature:num('vd_temperature'),speed:num('vd_speed'),pitch:num('vd_pitch')};
+ return {name:document.getElementById('vdName').value.trim(),
+  engine:document.getElementById('vdEngine').value,
+  model:document.getElementById('vdModel').value,
+  language:document.getElementById('vdLanguage').value,
+  voice:document.getElementById('vdVoice').value,
+  tags:document.getElementById('vdTagList').value,
+  tuning};
+}
+async function vdPreview(){
+ vsSay('Rendering a preview…');
+ try{
+  const r=await fetch('/api/voices/preview-draft',{method:'POST',headers:{'Content-Type':'application/json'},
+   body:JSON.stringify(Object.assign(vdCollect(),{text:vsText()}))});
+  if(!r.ok){const d=await r.json().catch(()=>({}));throw new Error(d.error||('HTTP '+r.status));}
+  const blob=await r.blob(); const eng=r.headers.get('X-Voice-Engine')||'',mode=r.headers.get('X-Voice-Mode')||'';
+  const a=document.getElementById('vsAudio'); a.src=URL.createObjectURL(blob);
+  try{await a.play();}catch(e){}
+  vsSay('▶ preview on '+eng+(mode==='standby'?' (standby — the profile engine is unavailable here)':'')+' — '+((blob.size/1024)|0)+' KB','#86efac');
+ }catch(e){vsSay('Preview failed: '+e.message,'#fecaca');}
+}
+async function vdSave(){
+ vsSay('Saving…');
+ try{
+  const r=await fetch('/api/voices/design',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(vdCollect())});
+  const d=await r.json();
+  if(!r.ok||d.error)throw new Error(d.error||('HTTP '+r.status));
+  vsSay('Saved "'+d.voice.name+'" to the library.','#86efac'); vsLoad();
+ }catch(e){vsSay('Could not save: '+e.message,'#fecaca');}
+}
+function vsText(){return document.getElementById('vsSayText').value.trim()||'Hello, this is Lina from Medicare Marketplace. How can I help you today?';}
+async function vsPreview(id){
+ vsSay('Rendering "'+vsName(id)+'"…');
+ await vsSpeakUrl('/api/voices/'+encodeURIComponent(id)+'/preview',{text:vsText()});
+}
+async function vsSay(){
+ const id=document.getElementById('vsSayVoice').value;
+ if(!id){vsSay('Save a voice first.','#fecaca');return;}
+ vsSay('Rendering…');
+ await vsSpeakUrl('/api/voices/'+encodeURIComponent(id)+'/preview',
+  {text:vsText(),include_tags:document.getElementById('vsSayTags').checked});
+}
+async function vsSpeakUrl(url,body){
+ try{
+  const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  if(!r.ok){const d=await r.json().catch(()=>({}));throw new Error(d.error||('HTTP '+r.status));}
+  const blob=await r.blob();
+  const eng=r.headers.get('X-Voice-Engine')||'',mode=r.headers.get('X-Voice-Mode')||'';
+  const a=document.getElementById('vsAudio'); a.src=URL.createObjectURL(blob);
+  try{await a.play();}catch(e){}
+  vsSay('▶ '+(mode==='standby'?'standby ('+eng+') — the engine for this profile is unavailable here':'speaking with '+eng)+' — '+((blob.size/1024)|0)+' KB of 16 kHz audio','#86efac');
+ }catch(e){vsSay('Could not render audio: '+e.message,'#fecaca');}
+}
+async function vsApply(id){
+ try{
+  const r=await fetch('/api/voices/'+encodeURIComponent(id)+'/apply',{method:'POST'});
+  const d=await r.json();
+  if(!r.ok||d.error)throw new Error(d.error||('HTTP '+r.status));
+  const a=d.applied||{};
+  vsSay('Now speaking with "'+d.voice.name+'" ('+a.engine+(a.model?' / '+a.model:'')+(a.language?' / '+a.language:'')+(a.voice?' / '+String(a.voice).split(/[\\\\/]/).pop():'')+')','#86efac');
+  vsLoad();
+ }catch(e){vsSay('Could not apply: '+e.message,'#fecaca');}
+}
+async function vsDelete(id){
+ if(!confirm('Delete "'+vsName(id)+'" from the library?'))return;
+ try{
+  const r=await fetch('/api/voices/'+encodeURIComponent(id),{method:'DELETE'});
+  const d=await r.json();
+  if(!r.ok||d.error)throw new Error(d.error||('HTTP '+r.status));
+  vsSay('Deleted "'+vsName(id)+'".','#fecaca'); vsLoad();
+ }catch(e){vsSay('Could not delete: '+e.message,'#fecaca');}
+}
+async function vsRename(id){
+ const name=prompt('New name:',vsName(id)); if(!name)return;
+ try{
+  const r=await fetch('/api/voices/'+encodeURIComponent(id),{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({name})});
+  const d=await r.json();
+  if(!r.ok||d.error)throw new Error(d.error||('HTTP '+r.status));
+  vsSay('Renamed to "'+d.voice.name+'".','#86efac'); vsLoad();
+ }catch(e){vsSay('Could not rename: '+e.message,'#fecaca');}
+}
+async function vsSaveCurrent(){
+ const name=document.getElementById('vsSaveName').value.trim();
+ if(!name){vsSay('Give the snapshot a name first.','#fecaca');return;}
+ try{
+  const r=await fetch('/api/voices/current',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name})});
+  const d=await r.json();
+  if(!r.ok||d.error)throw new Error(d.error||('HTTP '+r.status));
+  vsSay('Saved the current voice as "'+d.voice.name+'" ('+d.voice.source+').','#86efac');
+  document.getElementById('vsSaveName').value=''; vsLoad();
+ }catch(e){vsSay('Could not save: '+e.message,'#fecaca');}
+}
+function vsAddMeta(){
+ // When matching is on, the matcher picks the engine — sending one would override
+ // it, so the engine select is simply left out of the payload.
+ const match=!!(document.getElementById('vsMatch')||{}).checked;
+ const meta={engine:document.getElementById('vsAddEngine').value};
+ if(match){meta.match=true; delete meta.engine;}
+ return meta;
+}
+function vsMatchNote(d){
+ if(!d.match)return '';
+ const m=d.match;
+ return ' Matched to '+m.model+' (~'+Math.round(m.voice_stats.f0_hz)+' Hz, pitch '
+  +m.pitch_level+'/99, '+(m.speed).toFixed(2)+'x, confidence '+(m.confidence*100).toFixed(0)+'%).';
+}
+async function vsCheckMatch(){
+ const f=document.getElementById('vsFile').files[0];
+ const path=document.getElementById('vsPath').value.trim();
+ const out=document.getElementById('vsMatchOut');
+ const body={};
+ if(f){body.data_base64=await new Promise((res,rej)=>{const fr=new FileReader();fr.onload=()=>res(fr.result);fr.onerror=rej;fr.readAsDataURL(f);});}
+ else if(path){body.path=path;}
+ else{out.textContent='Pick a file or enter a server path first.';return;}
+ out.textContent='measuring…';
+ try{
+  const r=await fetch('/api/voices/match',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  const d=await r.json();
+  if(!r.ok||d.error)throw new Error(d.error||('HTTP '+r.status));
+  const m=d.match;
+  out.innerHTML='closest: <b>'+vsEsc(m.model)+'</b> — pitch '+m.pitch_level+'/99, '+(m.speed).toFixed(2)
+   +'x, confidence '+(m.confidence*100).toFixed(0)+'%. <span style="color:#64748b">'+vsEsc(m.why)+'</span>';
+ }catch(e){out.textContent='match failed: '+e.message;}
+}
+async function vsUploadFile(){
+ const f=document.getElementById('vsFile').files[0];
+ if(!f){vsSay('Choose a file first.','#fecaca');return;}
+ const name=document.getElementById('vsAddName').value.trim();
+ if(!name){vsSay('Give the voice a name first.','#fecaca');return;}
+ vsSay('Uploading '+f.name+'…');
+ try{
+  const data_base64=await new Promise((res,rej)=>{const fr=new FileReader();fr.onload=()=>res(fr.result);fr.onerror=rej;fr.readAsDataURL(f);});
+  const r=await fetch('/api/voices/upload',{method:'POST',headers:{'Content-Type':'application/json'},
+   body:JSON.stringify(Object.assign(vsAddMeta(),{name,filename:f.name,data_base64}))});
+  const d=await r.json();
+  if(!r.ok||d.error)throw new Error(d.error||('HTTP '+r.status));
+  vsSay('Added "'+d.voice.name+'" — '+(d.voice.duration_sec||0)+'s reference.'+vsMatchNote(d),'#86efac');
+  document.getElementById('vsAddName').value=''; document.getElementById('vsFile').value=''; vsLoad();
+ }catch(e){vsSay('Upload failed: '+e.message,'#fecaca');}
+}
+async function vsImportPath(){
+ const path=document.getElementById('vsPath').value.trim();
+ const name=document.getElementById('vsAddName').value.trim()||(path.split(/[\\\\/]/).pop()||'').replace(/\\.[a-z0-9]+$/i,'');
+ if(!path){vsSay('Enter a path to a wav file on the server.','#fecaca');return;}
+ try{
+  const r=await fetch('/api/voices/upload',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(Object.assign(vsAddMeta(),{name,path}))});
+  const d=await r.json();
+  if(!r.ok||d.error)throw new Error(d.error||('HTTP '+r.status));
+  vsSay('Imported "'+d.voice.name+'" — '+(d.voice.duration_sec||0)+'s reference.'+vsMatchNote(d),'#86efac');
+  document.getElementById('vsPath').value=''; document.getElementById('vsAddName').value=''; vsLoad();
+ }catch(e){vsSay('Import failed: '+e.message,'#fecaca');}
+}
+let vsRecorder=null;
+async function vsRecord(){
+ const btn=document.getElementById('vsRecBtn'), meter=document.getElementById('vsRecMeter');
+ if(vsRecorder){vsRecorder.stop();return;}
+ const name=document.getElementById('vsAddName').value.trim();
+ if(!name){vsSay('Give the voice a name before recording.','#fecaca');return;}
+ const secs=parseInt(document.getElementById('vsRecSecs').value,10);
+ let stream;
+ try{stream=await navigator.mediaDevices.getUserMedia({audio:{channelCount:1,echoCancellation:true,noiseSuppression:true}});}
+ catch(e){vsSay('Microphone unavailable: '+(e.message||e.name),'#fecaca');return;}
+ const ctx=new (window.AudioContext||window.webkitAudioContext)({sampleRate:16000});
+ const src=ctx.createMediaStreamSource(stream);
+ const proc=ctx.createScriptProcessor(4096,1,1);
+ const parts=[]; let loudest=0;
+ proc.onaudioprocess=e=>{
+  const f=e.inputBuffer.getChannelData(0);
+  const i16=new Int16Array(f.length);
+  for(let i=0;i<f.length;i++){const v=Math.max(-1,Math.min(1,f[i]));i16[i]=v<0?v*32768:v*32767;if(Math.abs(v)>loudest)loudest=Math.abs(v);}
+  parts.push(i16);
+  meter.textContent=Math.max(0,loudest*100).toFixed(0)+'%';
+ };
+ src.connect(proc); proc.connect(ctx.destination);
+ const chunks=[];
+ vsRecorder={
+  stop:async()=>{
+   try{proc.disconnect();src.disconnect();}catch(e){}
+   stream.getTracks().forEach(t=>t.stop());
+   try{proc.onaudioprocess=null; await ctx.close();}catch(e){}
+   vsRecorder=null; btn.textContent='⏺ Record & add'; meter.textContent='';
+   let total=0; parts.forEach(p=>total+=p.length);
+   const all=new Int16Array(total); let off=0; parts.forEach(p=>{all.set(p,off);off+=p.length;});
+   if(loudest<0.01){vsSay('That recording was silent — check the mic and try again.','#fecaca');return;}
+   const bytes=new Uint8Array(all.buffer);
+   let bin=''; for(let i=0;i<bytes.length;i++)bin+=String.fromCharCode(bytes[i]);
+   const pcm_base64=btoa(bin);
+   vsSay('Uploading '+secs+'s recording…');
+   try{
+    const r=await fetch('/api/voices/upload',{method:'POST',headers:{'Content-Type':'application/json'},
+     body:JSON.stringify(Object.assign(vsAddMeta(),{name,pcm_base64,sample_rate:16000}))});
+    const d=await r.json();
+    if(!r.ok||d.error)throw new Error(d.error||('HTTP '+r.status));
+    vsSay('Recorded and saved "'+d.voice.name+'" — '+(d.voice.duration_sec||0)+'s reference.'+vsMatchNote(d),'#86efac');
+    document.getElementById('vsAddName').value=''; vsLoad();
+   }catch(e){vsSay('Could not save the recording: '+e.message,'#fecaca');}
+  }};
+ btn.textContent='⏹ Stop ('+secs+'s max)';
+ vsSay('Recording… speak naturally, then press Stop (auto-stops at '+secs+'s).');
+ setTimeout(()=>{if(vsRecorder)vsRecorder.stop();},secs*1000);
+}
+async function vrSave(){
+ const name=document.getElementById('vrName').value.trim();
+ const picks=[...document.querySelectorAll('.vrPick:checked')].map(cb=>({
+  id:cb.value, weight:parseFloat(cb.parentElement.querySelector('.vrW').value)||1}));
+ if(!name){vsSay('Give the remix a name first.','#fecaca');return;}
+ if(picks.length<1){vsSay('Tick at least one voice to remix.','#fecaca');return;}
+ try{
+  const r=await fetch('/api/voices/remix',{method:'POST',headers:{'Content-Type':'application/json'},
+   body:JSON.stringify({name,sources:picks,mode:document.getElementById('vrMode').value,
+    pitch_semitones:parseFloat(document.getElementById('vrPitch').value)||0,
+    match:!!(document.getElementById('vrNeural')||{}).checked})});
+  const d=await r.json();
+  if(!r.ok||d.error)throw new Error(d.error||('HTTP '+r.status));
+  vsSay('Remixed into "'+d.voice.name+'" ('+d.voice.duration_sec+'s). '+d.voice.notes,'#86efac');
+  document.getElementById('vrName').value=''; vsLoad();
+ }catch(e){vsSay('Remix failed: '+e.message,'#fecaca');}
+}
+vsLoad();
+</script>
 <h2 style="margin-top:1.6rem;color:#38bdf8;font-size:1rem" id="cbHeading" hidden>&#127925; ChatterBox voice control</h2>
 <div id="cbPanel" style="background:#1e293b;border:1px solid #334155;border-radius:.5rem;padding:1rem;margin:.6rem 0 1.4rem" hidden>
 <div id="cbInfo" style="font-size:.8rem;color:#94a3b8;margin-bottom:.7rem">Loading ChatterBox status&hellip;</div>
@@ -787,25 +2086,35 @@ function cbSay(msg,color){const m=document.getElementById('cbMsg');m.textContent
 async function cbLoad(){
  try{
   const r=await fetch('/api/tts/voices');const d=await r.json();
-  if((d.provider||'')!=='chatterbox'){document.getElementById('cbPanel').hidden=true;document.getElementById('cbHeading').hidden=true;return;}
+  // Show the panel when ChatterBox is the configured engine OR currently active.
+  // Using only `provider` (the *active* engine) hid the panel after a failover,
+  // leaving the operator unable to see status or switch models.
+  if((d.provider||'')!=='chatterbox' && (d.primary||'')!=='chatterbox'){document.getElementById('cbPanel').hidden=true;document.getElementById('cbHeading').hidden=true;return;}
   document.getElementById('cbPanel').hidden=false;document.getElementById('cbHeading').hidden=false;
   const info=d.model_info||{};
+  if(d.failover_reason) cbSay('\u26a0 '+d.failover_reason,'#fecaca');
   const parts=[info.description||'ChatterBox'];
   parts.push((info.languages||[]).length + ' language' + (((info.languages||[]).length>1)?'s':''));
   if(info.paralinguistic_tags)parts.push('paralinguistic tags');
-  parts.push(info.voice_cloned?'voice cloned':'built-in voice');
+  parts.push(info.voice_cloned?'voice cloned':(info.voice_path?'voice reference INVALID':'built-in voice'));
   parts.push('out '+(info.output_rate/1000)+'kHz');
   document.getElementById('cbInfo').textContent=parts.join(' · ');
-  const models=d.available_models||[];
+  if(info.voice_reference_problem){
+   cbSay('\u26a0 '+info.voice_reference_problem,'#fecaca');
+  } else if(info.voice_cloned){
+   cbSay('Voice clone reference: '+info.voice_path,'#86efac');
+  }
+  const models=d.available_models||info.available_models||[];
   const sel=document.getElementById('cbModel');
   sel.innerHTML=models.map(m=>'<option value="'+m+'"'+(m===info.model?' selected':'')+'>'+m+'</option>').join('');
-  const langs=info.languages||[];
+  const allLangs=info.available_languages||{};
+  const langs=info.multilingual?Object.keys(allLangs):(info.languages||[]);
   const langSel=document.getElementById('cbLang');
   const multi=langs.length>1;
   document.getElementById('cbLangLabel').style.display=multi?'':'none';
   document.getElementById('cbLangBtn').style.display=multi?'':'none';
   langSel.style.display=multi?'':'none';
-  langSel.innerHTML=langs.map(l=>'<option value="'+l+'"'+(l===info.language?' selected':'')+'>'+l+'</option>').join('');
+  langSel.innerHTML=langs.map(l=>'<option value="'+l+'"'+(l===info.language?' selected':'')+'>'+l+(allLangs[l]?' \u2014 '+allLangs[l]:'')+'</option>').join('');
   document.getElementById('cbTags').hidden=!info.paralinguistic_tags;
   document.getElementById('cbChips').innerHTML=CB_TAGS.map(t=>
     '<span class="btn" onclick="cbInsert(this.textContent)" style="background:#334155;padding:.25rem .6rem;border-radius:1rem;font-size:.75rem;cursor:pointer;font-family:monospace">'+t+'</span>').join('');
@@ -818,16 +2127,18 @@ async function cbPost(body){
  return d;}
 document.getElementById('cbModelBtn').onclick=async()=>{
  try{cbSay('Switching model…');const d=await cbPost({model:document.getElementById('cbModel').value});
-  cbSay('Switched to ChatterBox-'+d.model_info.model+' — loading weights on first use.','#86efac');cbLoad();}
+  if(d.warning)cbSay('⚠ '+d.warning,'#fecaca');
+  else cbSay('Switched to ChatterBox-'+d.applied.model+' — loading weights on first use.','#86efac');
+  cbLoad();}
  catch(e){cbSay('Model switch failed: '+e.message,'#fecaca');}};
 document.getElementById('cbLangBtn').onclick=async()=>{
- try{cbSay('Setting language…');await cbPost({language:document.getElementById('cbLang').value});
-  cbSay('Language updated.','#86efac');cbLoad();}
+ try{cbSay('Setting language…');const d=await cbPost({language:document.getElementById('cbLang').value});
+  cbSay('Language set to '+d.applied.language+'.','#86efac');cbLoad();}
  catch(e){cbSay('Language change failed: '+e.message,'#fecaca');}};
 document.getElementById('cbVoiceBtn').onclick=async()=>{
  const v=document.getElementById('cbVoice').value.trim();
  if(!v){cbSay('Enter a .wav path to clone (or clear it to use the built-in voice).','#fecaca');return;}
- try{await cbPost({voice:v});cbSay('Voice clone reference set: '+v,'#86efac');cbLoad();}
+ try{const d=await cbPost({voice:v});cbSay('Voice clone reference set: '+d.applied.voice,'#86efac');cbLoad();}
  catch(e){cbSay('Voice clone failed: '+e.message,'#fecaca');}};
 document.getElementById('cbSpeakBtn').onclick=async()=>{
  const text=document.getElementById('cbText').value.trim();
@@ -837,8 +2148,17 @@ document.getElementById('cbSpeakBtn').onclick=async()=>{
   const r=await fetch('/api/debug/speak',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text})});
   if(!r.ok){const d=await r.json().catch(()=>({}));throw new Error(d.error||('HTTP '+r.status));}
   const blob=await r.blob();
-  document.getElementById('cbAudio').src=URL.createObjectURL(blob);
-  cbSay('Ready — press play.','#86efac');
+  const a=document.getElementById('cbAudio');
+  a.src=URL.createObjectURL(blob);
+  // Play straight away — the click that got us here is the required gesture,
+  // so waiting for a second click was pointless (and looked like "no audio").
+  const secs=await new Promise(res=>{a.onloadedmetadata=()=>res(a.duration);setTimeout(()=>res(null),2500);});
+  try{
+   await a.play();
+   cbSay('▶ playing '+(secs?secs.toFixed(1)+'s':'')+' of audio ('+(blob.size/1024).toFixed(0)+' KB). If you still hear nothing, check your system output device and the tab volume.','#86efac');
+  }catch(perr){
+   cbSay('Audio ready — press ▶ on the player below ('+(perr.message||'the browser blocked autoplay')+').','#fecaca');
+  }
  }catch(e){cbSay('TTS failed: '+e.message+' (model weights may still be downloading, or disk space is short).','#fecaca');}};
 cbLoad();</script>
 
@@ -962,8 +2282,12 @@ function bubble(cls,html){const d=document.createElement('div');d.className='msg
 function esc(s){return (s||'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
 function setConn(t,c){const e=document.getElementById('conn');e.textContent=t;e.className='val '+(c||'');}
 function setState(t){document.getElementById('state').textContent=t;}
+// Any click unlocks Web Audio — the reliable way out of a strict autoplay block.
+document.addEventListener('click',()=>{if(playCtx&&playCtx.state!=='running')playCtx.resume().catch(()=>{});},{passive:true});
 
 function playPCM(int16){
+    if(!playCtx) return;
+    if(playCtx.state!=='running') playCtx.resume().catch(()=>{});
     const f=new Float32Array(int16.length);
     for(let i=0;i<int16.length;i++) f[i]=int16[i]/32768;
     const buf=playCtx.createBuffer(1,f.length,SAMPLE_RATE);
@@ -975,11 +2299,11 @@ function playPCM(int16){
     nextPlayTime=start+buf.duration;
     activeSources.push(s);
     s.onended=()=>{activeSources=activeSources.filter(x=>x!==s);};
-    speaking=true; updateMeter(true); syncWorkletState();
+    speaking=true; updateMeter(true);
 }
 function stopPlayback(){
     activeSources.forEach(s=>{try{s.stop()}catch(e){}});
-    activeSources=[]; nextPlayTime=playCtx?playCtx.currentTime:0; speaking=false; updateMeter(false); syncWorkletState();
+    activeSources=[]; nextPlayTime=playCtx?playCtx.currentTime:0; speaking=false; updateMeter(false);
 }
 function updateMeter(on){
     document.getElementById('spkMeter').firstElementChild.style.width=on?'100%':'0%';
@@ -1020,90 +2344,29 @@ async function startMic(){
     if(!stream) throw (err||new Error('Could not open the microphone.'));
     micStream=stream;
 
-    // 3. Capture context at 16 kHz using AudioWorklet (ScriptProcessorNode is deprecated).
-    //    Inline worklet via blob URL — no extra file needed.
+    // 3. Capture context at 16 kHz. If the browser ignores it, resample per block.
     capCtx=new (window.AudioContext||window.webkitAudioContext)({sampleRate:SAMPLE_RATE});
     const ctxRate=capCtx.sampleRate||SAMPLE_RATE;
     source=capCtx.createMediaStreamSource(micStream);
-
-    const workletCode = `
-        class MicProcessor extends AudioWorkletProcessor {
-            constructor() {
-                super();
-                this.targetRate = ${SAMPLE_RATE};
-                this.ctxRate = sampleRate;
-                this.bargeOk = 0;
-                this.speaking = false;
-                this.port.onmessage = (e) => {
-                    if (e.data?.type === 'speaking') this.speaking = e.data.value;
-                    if (e.data?.type === 'bargeOk') this.bargeOk = e.data.value;
-                };
-            }
-            resampleLinear(input, fromRate, toRate) {
-                if (fromRate === toRate) return input;
-                const ratio = fromRate / toRate;
-                const outLen = Math.ceil(input.length / ratio);
-                const out = new Float32Array(outLen);
-                for (let i = 0; i < outLen; i++) {
-                    const srcIdx = i * ratio;
-                    const i0 = Math.floor(srcIdx);
-                    const i1 = Math.min(i0 + 1, input.length - 1);
-                    const frac = srcIdx - i0;
-                    out[i] = input[i0] * (1 - frac) + input[i1] * frac;
-                }
-                return out;
-            }
-            process(inputs, outputs, parameters) {
-                const input = inputs[0];
-                if (!input || !input[0]) return true;
-                const f = input[0];
-                let pcm = this.ctxRate !== this.targetRate ? this.resampleLinear(f, this.ctxRate, this.targetRate) : f;
-                let sum = 0;
-                for (let i = 0; i < pcm.length; i++) sum += pcm[i] * pcm[i];
-                const rms = Math.sqrt(sum / pcm.length);
-                const out16 = new Int16Array(pcm.length);
-                for (let i = 0; i < pcm.length; i++) {
-                    const s = Math.max(-1, Math.min(1, pcm[i]));
-                    out16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
-                }
-                this.port.postMessage({ type: 'meter', rms });
-                this.port.postMessage({ type: 'pcm', buffer: out16.buffer }, [out16.buffer]);
-                const now = currentTime * 1000;
-                if (this.speaking && rms > 0.02 && now > this.bargeOk) {
-                    this.bargeOk = now + 900;
-                    this.port.postMessage({ type: 'barge' });
-                }
-                return true;
-            }
-        }
-        registerProcessor('mic-processor', MicProcessor);
-    `;
-    const blob = new Blob([workletCode], { type: 'application/javascript' });
-    const workletUrl = URL.createObjectURL(blob);
-    await capCtx.audioWorklet.addModule(workletUrl);
-
-    processor = new AudioWorkletNode(capCtx, 'mic-processor');
-    source.connect(processor);
-    processor.connect(capCtx.destination);
-
-    processor.port.onmessage = (e) => {
-        const msg = e.data;
-        if (msg.type === 'meter') {
-            document.getElementById('micMeter').firstElementChild.style.width = Math.min(100, msg.rms * 400) + '%';
-        } else if (msg.type === 'pcm') {
-            if (ws && ws.readyState === 1) ws.send(msg.buffer);
-        } else if (msg.type === 'barge') {
-            if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: 'barge' }));
+    processor=capCtx.createScriptProcessor(4096,1,1);
+    source.connect(processor); processor.connect(capCtx.destination);
+    processor.onaudioprocess=(e)=>{
+        let f=e.inputBuffer.getChannelData(0);
+        if(ctxRate!==SAMPLE_RATE) f=resampleLinear(f, ctxRate, SAMPLE_RATE);
+        let sum=0; for(let i=0;i<f.length;i++) sum+=f[i]*f[i];
+        const rms=Math.sqrt(sum/f.length);
+        document.getElementById('micMeter').firstElementChild.style.width=Math.min(100,rms*400)+'%';
+        const pcm=new Int16Array(f.length);
+        for(let i=0;i<f.length;i++){const s=Math.max(-1,Math.min(1,f[i]));pcm[i]=s<0?s*0x8000:s*0x7FFF;}
+        if(ws&&ws.readyState===1) ws.send(pcm.buffer);
+        const now=Date.now();
+        if(speaking && rms>0.02 && now>bargeOk){
+            bargeOk=now+900;
+            if(ws&&ws.readyState===1) ws.send(JSON.stringify({type:'barge'}));
             stopPlayback();
-            bubble('sys', '&#9995; <b>You interrupted Lina</b> (barge-in) — she stopped talking and is now listening.');
+            bubble('sys','&#9995; <b>You interrupted Lina</b> (barge-in) — she stopped talking and is now listening.');
         }
     };
-
-    // Sync speaking/bargeOk state to worklet
-    function syncWorkletState() {
-        processor.port.postMessage({ type: 'speaking', value: speaking });
-        processor.port.postMessage({ type: 'bargeOk', value: bargeOk });
-    }
 }
 
 function startCall(){
@@ -1119,6 +2382,13 @@ function startCall(){
         document.getElementById('startBtn').disabled=true;
         document.getElementById('endBtn').disabled=false;
         playCtx=new (window.AudioContext||window.webkitAudioContext)({sampleRate:SAMPLE_RATE});
+        // Autoplay policy: an AudioContext created in a callback (not a click)
+        // starts "suspended", which plays the streamed frames *silently* — the
+        // call looked dead even when the audio was arriving. Resume it and say
+        // so if the browser still refuses.
+        if(playCtx.state!=='running'){try{await playCtx.resume();}catch(e){}}
+        if(playCtx.state!=='running')
+            bubble('sys','&#128263; <b>Audio is muted by the browser.</b> Click anywhere on this page to allow sound, then start the call again.');
         bubble('sys','&#128251; Live call started. Lina is speaking — just talk to interrupt her (barge-in).');
         try{
             await startMic();
@@ -1144,8 +2414,8 @@ function resetBtns(){document.getElementById('startBtn').disabled=false;document
 function handle(m){
     if(m.type==='agent_say'){ bubble('agent','<b>Lina:</b> '+esc(m.text)); dbg.textContent=JSON.stringify(m,null,1); }
     else if(m.type==='audio'){ const i16=base64ToInt16(m.data); if(i16) playPCM(i16); }
-    else if(m.type==='speech_start'){ speaking=true; setState('Lina speaking...'); updateMeter(true); syncWorkletState(); }
-    else if(m.type==='speech_end'){ speaking=false; updateMeter(false); setState('listening'); syncWorkletState(); }
+    else if(m.type==='speech_start'){ speaking=true; setState('Lina speaking...'); updateMeter(true); }
+    else if(m.type==='speech_end'){ speaking=false; updateMeter(false); setState('listening'); }
     else if(m.type==='speech_cancel'){ stopPlayback(); setState('interrupted'); }
     else if(m.type==='listening'){ listening=m.state==='on'; setState(listening?'listening — go ahead':'thinking...'); }
     else if(m.type==='transcript'){
@@ -1161,6 +2431,7 @@ function handle(m){
     else if(m.type==='recording_saved'){
         bubble('sys','&#127909; <b>Recording saved</b> ('+(m.duration_sec||0)+'s) &rarr; <a href="/recordings/'+esc(m.id)+'" target="_blank" style="color:#7dd3fc">play it</a> &middot; <a href="/#recordings" style="color:#7dd3fc">all recordings</a>');
     }
+    else if(m.type==='notice'){ bubble('sys','&#8505;&#65039; '+esc(m.message)); }
     else if(m.type==='error'){ bubble('sys','&#10060; '+esc(m.message)); }
 }
 function base64ToInt16(b64){
@@ -1181,7 +2452,8 @@ document.getElementById('text').addEventListener('keydown',e=>{if(e.key==='Enter
 fetch('/api/debug/voice').then(r=>r.json()).then(v=>{
     const b=document.getElementById('llmBadge');
     b.textContent='brain: '+(v.llm||'?');
-    if(!v.realtime) bubble('sys','&#9888; voice keys missing — check .env (ELEVENLABS_API_KEY + DEEPGRAM_API_KEY)');
+    if(v.warning) bubble('sys','&#9888; '+v.warning);
+    else if(!v.realtime) bubble('sys','&#9888; real-time voice unavailable — see /api/debug/voice');
 }).catch(()=>{});
 </script></body></html>
 """

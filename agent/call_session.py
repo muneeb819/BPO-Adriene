@@ -36,7 +36,13 @@ class ConsoleChannel(CallChannel):
         print(f"AGENT: {text}")
 
     def listen(self) -> str:
-        return input("CALLER: ").strip()
+        try:
+            return input("CALLER: ").strip()
+        except EOFError:
+            # stdin closed (piped input, CI, or Ctrl-D): treat it as the caller
+            # hanging up instead of crashing the session with a traceback.
+            print()
+            return ""
 
     def transfer(self) -> None:
         print("[CONSOLE] >>> transferring to closer (simulated) <<<")

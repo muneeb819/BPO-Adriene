@@ -113,6 +113,18 @@ class Conversation:
         out = re.sub(r"\{[^{}]*\}", "", out)
         return re.sub(r"\s{2,}", " ", out).strip()
 
+    def _line(self, key: str, default: str) -> str:
+        """Campaign line for `key`, falling back when missing *or blank*.
+
+        Operators can leave a field empty in the dashboard editor, and
+        `dict.get(key, default)` happily returns that empty string — which
+        would leave the customer in total silence. Treat blank as absent.
+        """
+        value = (self.campaign.lines or {}).get(key)
+        if isinstance(value, str) and value.strip():
+            return value
+        return default
+
     def _recent_turns(self) -> str:
         turns = self.ctx.transcript[-6:]
         return "\n".join(
@@ -176,8 +188,8 @@ class Conversation:
     # ---------------- flow ----------------
 
     def start(self) -> str:
-        fallback = self.campaign.lines.get("greet",
-            "Hi, this is {name} from {campaign}. How are you today?")
+        fallback = self._line(
+            "greet", "Hi, this is {name} from {campaign}. How are you today?")
         prompt = (
             f"You are starting the call. Warmly introduce yourself and ask how they are today.\n"
             f"Suggested: \"{self._fmt(fallback)}\"\n\n"
@@ -211,7 +223,7 @@ class Conversation:
         if detect_busy(customer_text):
             self._finalize("AI-BUSY")
             line = self._speak(
-                self.campaign.lines.get("busy_close", "No problem. Have a great day."),
+                self._line("busy_close", "No problem. Have a great day."),
                 customer_text, qid="busy", ask_line="", verdict="busy", kind="yes_no",
             )
             return BeatResult(ai_speech=line, end_call=True, disposition="AI-BUSY")
@@ -234,6 +246,13 @@ class Conversation:
     # ---------------- gates ----------------
 
     def _ask(self, idx: int, customer_text: str | None) -> BeatResult:
+        if not (0 <= idx < len(self.campaign.questions)):
+            # Campaign has no verification steps (an empty campaign can be
+            # created and deployed from the dashboard). Nothing can be verified,
+            # so never hand an unscreened lead to a closer and never let the
+            # caller hear dead air or an error: close politely and log it.
+            return self._no_steps()
+
         self.ctx.q_index = idx
         self.ctx.state = "IN_QUESTION"
         self.ctx.clarify_attempts = 0
@@ -243,6 +262,23 @@ class Conversation:
         self.ctx.transcript.append({"role": "ai", "text": line})
         self.ctx.last_ai_line = line
         return BeatResult(ai_speech=line, end_call=False)
+
+    def _no_steps(self) -> BeatResult:
+        """Gracefully end a call on a campaign that defines no questions.
+
+        Deploying an empty campaign is an operator mistake, not something the
+        customer should ever be exposed to. This used to raise IndexError and
+        return HTTP 500 from the debug API (and kill a live call).
+        """
+        print(f"[conversation] WARNING: campaign {self.campaign.id!r} has no "
+              f"verification steps — ending call as AI-UNCLEAR")
+        line = self._speak(
+            self._line(
+                "not_interested_close", "Thank you for your time. Have a great day."),
+            None, qid="no_steps", ask_line="", verdict="UNCLEAR", kind="yes_no",
+        )
+        self._finalize("AI-UNCLEAR")
+        return BeatResult(ai_speech=line, end_call=True, disposition="AI-UNCLEAR")
 
     def _verdict(self, q: Question, text: str) -> str:
         if q.kind == "age":
@@ -296,7 +332,7 @@ class Conversation:
         return BeatResult(ai_speech=line, end_call=False)
 
     def _transfer(self, text: str | None) -> BeatResult:
-        handoff = self.campaign.lines.get(
+        handoff = self._line(
             "transfer_handoff",
             "Perfect, one moment and I'll connect you with our licensed agent.")
         # Prefer the passing question's own "pass" line if it has one.

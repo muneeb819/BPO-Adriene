@@ -25,6 +25,9 @@ def resolve_voice_id(name: str) -> str:
     key = (name or "").strip().lower()
     if key in VOICE_IDS:
         return VOICE_IDS[key]
-    if len(key) == 32 and key.isalnum():
+    if key:
+        # A raw id (any length/case) or a name we do not know: hand it to the API
+        # untouched. Designed voices get their own ids and must not be replaced by
+        # the default — that would make a brand-new voice sound like Jessica.
         return name
     return VOICE_IDS.get("jessica", "cgSgspJ2msm6clMCkdW9")
