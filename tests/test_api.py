@@ -336,3 +336,41 @@ def test_the_voice_socket_checks_the_password(tmp_store, tmp_memory, monkeypatch
         c.cookies.set("bpo_auth", appmod._auth_token("s3cret"))
         with c.websocket_connect("/ws/voice") as ws:
             assert ws.receive_json()["type"]                # the session announced itself
+
+
+def test_debug_voice_reports_the_engine_that_is_actually_selected(tmp_store, tmp_memory, monkeypatch):
+    """The debug console must not cry "voice keys missing" when a voice works.
+
+    Ported from main's "include ChatterBox in realtime voice check" fix, extended
+    to the local neural engine: the payload names the selected voice, whether the
+    live socket can run, and — when it cannot — exactly what is missing.
+    """
+    import server.app as appmod
+
+    for provider, expected in (("piper", "en_US-amy-low"),
+                               ("chatterbox", "ChatterBox/multilingual"),
+                               ("elevenlabs", "Jessica")):
+        monkeypatch.setattr(appmod.CONFIG, "tts_provider", provider)
+        monkeypatch.setattr(appmod.CONFIG, "tts_standby_provider", "")
+        with TestClient(appmod.app) as c:
+            body = c.get("/api/debug/voice").json()
+        assert body["tts_provider"] == provider
+        assert body["voice"] == expected, (provider, body["voice"])
+        assert body["speak"] is True
+
+    # No mic configured -> the socket is not "realtime", and the warning must name
+    # the missing piece (the STT key), not pretend the voice engine is broken.
+    monkeypatch.setattr(appmod.CONFIG, "tts_provider", "piper")
+    monkeypatch.setattr(appmod.CONFIG, "stt_provider", "console")
+    with TestClient(appmod.app) as c:
+        body = c.get("/api/debug/voice").json()
+    assert body["realtime"] is False
+    assert "DEEPGRAM_API_KEY" in body["warning"]
+    assert "piper" in body["warning"]
+
+    # With a mic configured the live socket is realtime and there is no warning.
+    monkeypatch.setattr(appmod.CONFIG, "stt_provider", "deepgram")
+    monkeypatch.setattr(appmod.CONFIG, "deepgram_api_key", "dg-test")
+    with TestClient(appmod.app) as c:
+        body = c.get("/api/debug/voice").json()
+    assert body["realtime"] is True and body["warning"] == ""

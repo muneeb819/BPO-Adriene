@@ -1124,23 +1124,36 @@ def debug_voice_status():
     from agent.tts import TTS
 
     tts = TTS(CONFIG)
+    mic = bool(CONFIG.stt_provider == "deepgram" and CONFIG.deepgram_api_key)
+    # Every engine the live voice socket can drive. The socket needs a mic only
+    # when the caller is speaking into it, so a missing Deepgram key is a *mic*
+    # problem, not a "this voice cannot work" problem — which is why the warning
+    # below names the piece that is actually missing instead of blaming keys in
+    # general (that message used to appear even with a working local voice).
+    realtime = bool(tts.active in ("elevenlabs", "kokoro", "piper", "chatterbox") and mic)
+    warning = ""
+    if not realtime:
+        if tts.active in ("", "console"):
+            warning = ("no voice engine selected — set TTS_PROVIDER=piper "
+                       "(local neural voices, no key) or add a cloud key")
+        elif not mic:
+            warning = (f"mic input needs STT_PROVIDER=deepgram + DEEPGRAM_API_KEY — "
+                       f"the voice engine ({tts.active}) is ready")
     return {
         "speak": bool(tts.active and tts.active != "console"),
-        "mic": bool(CONFIG.stt_provider == "deepgram" and CONFIG.deepgram_api_key),
+        "mic": mic,
         "tts_provider": tts.active,
         "tts_primary": tts.primary,
         "tts_standby": tts.standby,
         "tts_failover_reason": tts.failover_reason,
         "stt_provider": CONFIG.stt_provider,
         "voice": (CONFIG.elevenlabs_voice if tts.active == "elevenlabs"
-                  else (CONFIG.piper_voice or CONFIG.piper_model)
-                  if tts.active == "piper" else CONFIG.kokoro_voice),
+                  else (CONFIG.piper_voice or CONFIG.piper_model) if tts.active == "piper"
+                  else f"ChatterBox/{CONFIG.chatterbox_model}" if tts.active == "chatterbox"
+                  else CONFIG.kokoro_voice),
         "llm": CONFIG.llm_provider,
-        "realtime": bool(
-            tts.active in ("elevenlabs", "kokoro")
-            and CONFIG.stt_provider == "deepgram"
-            and CONFIG.deepgram_api_key
-        ),
+        "realtime": realtime,
+        "warning": warning,
     }
 
 
@@ -2427,7 +2440,8 @@ document.getElementById('text').addEventListener('keydown',e=>{if(e.key==='Enter
 fetch('/api/debug/voice').then(r=>r.json()).then(v=>{
     const b=document.getElementById('llmBadge');
     b.textContent='brain: '+(v.llm||'?');
-    if(!v.realtime) bubble('sys','&#9888; voice keys missing — check .env (ELEVENLABS_API_KEY + DEEPGRAM_API_KEY)');
+    if(v.warning) bubble('sys','&#9888; '+v.warning);
+    else if(!v.realtime) bubble('sys','&#9888; real-time voice unavailable — see /api/debug/voice');
 }).catch(()=>{});
 </script></body></html>
 """
