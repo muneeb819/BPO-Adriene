@@ -12,3 +12,5 @@ matplotlib>=3.8  # only for docs/make_diagrams.py (architecture/cost diagrams)
 soundfile>=0.12  # voice studio: decode mp3/flac/ogg uploads (wav works without it)
 piper-tts>=1.2  # local neural voices (scripts/neural_tts_server.py, engine 'piper')
 onnxruntime>=1.17  # CPU inference for those Piper voices
+pytest>=8.0  # the readiness gate and ./start.sh --tests
+

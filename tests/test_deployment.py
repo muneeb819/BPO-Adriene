@@ -195,10 +195,26 @@ def test_compose_mounts_data_and_reads_env():
 # requirements — what a fresh install actually gets
 # ---------------------------------------------------------------------------
 
-@pytest.mark.parametrize("package", ["piper-tts", "onnxruntime", "soundfile", "fastapi", "uvicorn"])
+@pytest.mark.parametrize("package", ["piper-tts", "onnxruntime", "soundfile", "fastapi",
+                                      "uvicorn", "pytest"])
 def test_requirements_cover_a_working_deployment(package):
     text = (ROOT / "requirements.txt").read_text().lower()
     assert package in text, f"{package} is missing from requirements.txt"
+
+
+def test_requirements_install_everything_the_readiness_advice_tells_you_to_run():
+    """The report ends with "verify: python -m pytest tests/ -q".
+
+    A fresh clone used to install without pytest, so following that advice on a
+    brand-new server failed with "No module named pytest" — caught by installing
+    a clean clone end to end.
+    """
+    req = (ROOT / "requirements.txt").read_text().lower()
+    assert "pytest" in req
+    for launcher in ("start.sh", "start.ps1", "DEPLOYMENT.md", "README.md"):
+        text = (ROOT / launcher).read_text(errors="ignore")
+        if "pytest" in text:
+            assert "pytest" in req, f"{launcher} tells the operator to run pytest"
 
 
 # ---------------------------------------------------------------------------
