@@ -374,3 +374,23 @@ def test_debug_voice_reports_the_engine_that_is_actually_selected(tmp_store, tmp
     with TestClient(appmod.app) as c:
         body = c.get("/api/debug/voice").json()
     assert body["realtime"] is True and body["warning"] == ""
+
+
+@pytest.mark.parametrize("engine,voice", [("piper", "en_US-lessac-medium"),
+                                          ("kokoro", "af_bella")])
+def test_a_draft_preview_renders_for_every_engine_in_the_designer(
+        tmp_store, tmp_memory, engine, voice):
+    """The designer's engine picker lists three engines — all three must render.
+
+    Regression: `piper` was offered by the studio UI while the draft-preview
+    endpoint still rejected anything but chatterbox/kokoro.
+    """
+    with TestClient(appmod.app) as c:
+        r = c.post("/api/voices/preview-draft",
+                   json={"engine": engine, "voice": voice, "tuning": {"speed": 1.0},
+                         "text": "Hello, this is a preview of my voice."})
+        if r.status_code != 200:                     # engine not installed here
+            pytest.skip(f"{engine} is not running on this machine: {r.json()}")
+        assert r.headers["content-type"] == "audio/wav"
+        assert len(r.content) > 20_000               # a real sentence, not a blip
+        assert r.headers["X-Voice-Requested"] == engine

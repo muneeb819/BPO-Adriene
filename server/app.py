@@ -1003,11 +1003,23 @@ def _draft_config(data: dict):
     from agent.voice_library import clean_tags, clean_tuning, validate_engine_language
 
     engine = (data.get("engine") or "chatterbox").strip().lower()
-    if engine not in ("chatterbox", "kokoro"):
-        raise AudioError(f"unknown engine '{engine}' — use one of: chatterbox, kokoro")
+    if engine not in ("chatterbox", "kokoro", "piper"):
+        raise AudioError("unknown engine '%s' — use one of: chatterbox, kokoro, piper"
+                         % engine)
     overrides: dict = {"tts_provider": engine}
     tuning = clean_tuning(data.get("tuning") or {})
-    if engine == "chatterbox":
+    if engine == "piper":
+        # The offline neural engine: pick a resident voice and pass the studio
+        # sliders through to it (pitch/speed are applied by the voice server).
+        if data.get("voice"):
+            overrides["piper_voice"] = str(data["voice"]).strip()
+        if "speed" in tuning:
+            overrides["piper_speed"] = float(tuning["speed"])
+        if "pitch" in tuning:
+            overrides["piper_pitch"] = int(tuning["pitch"])
+        if "volume" in tuning:
+            overrides["piper_volume"] = float(tuning["volume"])
+    elif engine == "chatterbox":
         model = (data.get("model") or CONFIG.chatterbox_model or "turbo").strip()
         language = (data.get("language") or "en").strip().lower()
         validate_engine_language(engine, model, language)
