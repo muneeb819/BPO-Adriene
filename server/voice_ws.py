@@ -91,6 +91,8 @@ class VoiceSession:
         the mic drops or the network blips we reconnect quietly instead of
         killing transcription for the rest of the call.
         """
+        if self._dg is None:
+            return                        # typed-only session (no STT configured)
         failures = 0
         while not self._closing:
             try:
@@ -238,11 +240,27 @@ class VoiceSession:
     async def run(self, ws_from_browser):
         self._ws = ws_from_browser
         self.recorder = CallRecorder()   # one recording per call
-        try:
-            self._dg = await self._connect_deepgram()
-        except Exception as e:
-            await self.send({"type": "error", "message": f"Deepgram failed: {e}"})
-            return
+
+        # Live transcription is optional. With no DEEPGRAM_API_KEY (plain debug
+        # mode) the console must still work on typed input, so an absent or
+        # unreachable STT degrades to "typed-only" instead of ending the call
+        # before the greeting is even spoken.
+        if self.config.stt_provider == "deepgram" and self.config.deepgram_api_key:
+            try:
+                self._dg = await self._connect_deepgram()
+            except Exception as e:
+                reason = str(e) or type(e).__name__
+                await self.send({
+                    "type": "notice",
+                    "message": f"Live mic transcription is unavailable ({reason}). "
+                               "Type your replies below — everything else works normally.",
+                })
+        else:
+            await self.send({
+                "type": "notice",
+                "message": "Mic transcription is off (STT_PROVIDER=console). "
+                           "Type your replies — everything else works normally.",
+            })
 
         # Start persistent readers (they run for the whole call).
         self._tasks = [

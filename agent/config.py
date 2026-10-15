@@ -55,7 +55,19 @@ class Config:
     kokoro_model: str = "kokoro"
     kokoro_voice: str = "af_bella"
     kokoro_speed: float = 1.0
+    kokoro_pitch: int = 0                     # 0 = the server's own default
     kokoro_timeout: float = 30.0
+    # Local neural voices (Piper/ONNX). Same wire format as Kokoro, served by
+    # scripts/neural_tts_server.py; voices live in data/models/piper.
+    piper_base_url: str = "http://127.0.0.1:8880"
+    piper_api_key: str = "not-needed"
+    piper_model: str = "piper"
+    piper_voice: str = ""                     # "" = the server picks the middle voice
+    piper_speed: float = 1.0
+    piper_pitch: int = 50                     # 0-99 studio scale, 50 = no shift
+    piper_volume: float = 1.0
+    piper_sample_rate: int = 16000
+    piper_timeout: float = 30.0
 
     # ChatterBox: Resemble AI open-source TTS (voice cloning, multilingual, paralinguistic tags)
     # Models: turbo (350M, English, paralinguistic tags), nano (110M, English, CPU 3x realtime),
@@ -95,6 +107,7 @@ class Config:
     port: int = 8000
     web_password: str = ""
     data_dir: str = "data"
+    voice_library_dir: str = "data/voices"    # saved voices (library/design/remix)
 
     @classmethod
     def load(cls) -> "Config":
@@ -158,7 +171,17 @@ class Config:
             kokoro_model=env("KOKORO_MODEL", "kokoro"),
             kokoro_voice=env("KOKORO_VOICE", "af_bella"),
             kokoro_speed=float(env("KOKORO_SPEED", "1.0")),
+            kokoro_pitch=int(env("KOKORO_PITCH", "0")),
             kokoro_timeout=float(env("KOKORO_TIMEOUT", "30")),
+            piper_base_url=env("PIPER_BASE_URL", "http://127.0.0.1:8880"),
+            piper_api_key=env("PIPER_API_KEY", "not-needed"),
+            piper_model=env("PIPER_MODEL", "piper"),
+            piper_voice=env("PIPER_VOICE", ""),
+            piper_speed=float(env("PIPER_SPEED", "1.0")),
+            piper_pitch=int(env("PIPER_PITCH", "50")),
+            piper_volume=float(env("PIPER_VOLUME", "1.0")),
+            piper_sample_rate=int(env("PIPER_SAMPLE_RATE", "16000")),
+            piper_timeout=float(env("PIPER_TIMEOUT", "30")),
             chatterbox_model=env("CHATTERBOX_MODEL", "turbo"),
             chatterbox_device=env("CHATTERBOX_DEVICE", "cuda"),
             chatterbox_voice_path=env("CHATTERBOX_VOICE_PATH", ""),
@@ -189,4 +212,5 @@ class Config:
             port=int(env("PORT", "8000")),
             web_password=env("WEB_PASSWORD", ""),
             data_dir=env("DATA_DIR", "data"),
+            voice_library_dir=env("VOICE_LIBRARY_DIR", "data/voices"),
         )

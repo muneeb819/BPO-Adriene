@@ -53,6 +53,24 @@ python cli.py stream   # synthesize 3 Lina lines → saves data/stream_test/*.mp
 python cli.py serve    # production-style server (dashboard + ARI listener)
 ```
 
+## Verify everything works
+Three independent levels, cheapest first:
+```bash
+python -m pytest tests/ -q          # 136 unit/integration tests (tmp stores, no server needed)
+python scripts/healthcheck.py       # readiness report (deps, keys, config, live server)
+python scripts/smoke_test.py        # full-feature end-to-end test against a running server
+```
+`smoke_test.py` drives **every** HTTP endpoint and **every** disposition path —
+all four campaigns, the age boundaries, DNC/busy/unclear, campaign create →
+edit → deploy → delete, insights, CSV/JSON exports, recordings (incl. a path
+traversal guard) and the real-time voice WebSocket. It needs the server up:
+
+```bash
+python cli.py debug                 # terminal 1
+python scripts/smoke_test.py        # terminal 2  → "ALL 127 CHECKS PASSED"
+python scripts/smoke_test.py --url http://localhost:9000 --no-ws
+```
+
 ## Live deployment (VICIdial + Asterisk)
 1. Enable ARI in `ari.conf` (`enabled = yes`, create `ari` user with read/write).
 2. Route your inbound final-expense DID to the Stasis app — see `configs/extensions.conf.example`.
@@ -61,7 +79,63 @@ python cli.py serve    # production-style server (dashboard + ARI listener)
    `ARI_*` and `VICIDIAL_*`.
 5. Run: `python cli.py serve` (starts web dashboard + ARI listener).
 
+## Voice studio (library, design, matching, remix)
+
+The dashboard's **🎙 Voice studio** turns voice settings into saved, reusable
+voices:
+
+* **Library** — add a voice by uploading a file, pointing at a file on the
+  server, or recording 8-20 s with the browser microphone; preview it, press
+  **Use** and the bot speaks with it (the choice survives a restart).
+* **Prompt to voice** — type *"warm older British man, speaks slowly"* and the
+  studio picks the resident neural voice that fits, stores the tuning the words
+  imply and shows you the reasoning word by word. Free and offline; the
+  ElevenLabs Voice Design path generates a brand-new voice from the description
+  when `ELEVENLABS_API_KEY` is set and says exactly how to enable it when it
+  is not.
+* **Matching** — feed it a recording and it measures pitch/brightness, names the
+  resident neural voice that is closest (**Check match**) and renders the
+  recording on that voice, so a clone or a blend can be judged by ear on a
+  machine with no ChatterBox weights and no cloud key.
+* **Remix** — pick two or more voices and combine them (weighted blend or
+  stitched with a crossfade), optionally re-matching the result to a neural voice.
+
+| | |
+|---|---|
+| API | `GET/POST /api/voices`, `PUT/DELETE /api/voices/{id}`, `POST /api/voices/{id}/apply`, `POST /api/voices/{id}/preview`, plus `/api/voices/upload`, `/design`, `/describe`, `/match`, `/design/providers`, `/design/elevenlabs`, `/remix`, `/current`, `/preview-draft` |
+| Storage | `data/voices/library.json` + one normalised 24 kHz mono wav per reference |
+| Docs | [VOICE_STUDIO.md](VOICE_STUDIO.md) — full reference, limits and verification |
+| Offline | `scripts/fetch_neural_voices.py` + `scripts/neural_tts_server.py` — real neural voices, no keys, no torch, no multi-GB downloads |
+
+```bash
+.venv/bin/python -m pytest tests/ -q                                          # 353 tests
+.venv/bin/python scripts/verify_voice_studio.py --url http://localhost:8000   # 49 live checks
+```
+
 ## Voice configuration
+
+### ChatterBox (local, clonable, 23 languages)
+
+Set `TTS_PROVIDER=chatterbox` (the dashboard then grows a **ChatterBox voice
+control** panel). Requires `pip install chatterbox-tts` and torch; the models
+are ~2–3 GB and load on first use.
+
+| Feature | How to use it |
+|---------|---------------|
+| Model switching | `POST /api/tts/switch-voice {"model":"turbo"\|"nano"\|"multilingual"\|"original"}` or the panel's **Model** dropdown. `turbo`/`nano` are fastest, `multilingual` speaks 23 languages, `original` is the reference model |
+| Language | `{"language":"es"}` (multilingual only — the English-only engines return `400`). Codes with names come back in `available_languages` |
+| Voice cloning | `{"voice":"C:/voices/agent_ref.wav"}` (10s+ of clean speech); `{"voice":""}` clears it back to the built-in voice. Missing/unreadable paths are rejected with the resolved absolute path |
+| Fields combine | `{"model":"multilingual","language":"es","voice":"…wav"}` applies all three in one request and echoes them back under `applied` |
+| Paralinguistic tags | `[laugh] [chuckle] [cough] [sigh] [gasp] [yawn] [um]` — clickable chips in the panel insert them into the test line (turbo/nano only) |
+| Expressiveness | `CHATTERBOX_EXAGGERATION`, `CHATTERBOX_CFG_WEIGHT`, `CHATTERBOX_TEMPERATURE` in `.env` |
+| Output format | ChatterBox synthesises at 24 kHz; the pipeline resamples to the 16 kHz mono the call path needs |
+
+Robustness: every request is validated (`400` + the list of valid values, never
+a `500`), an unavailable engine fails over to the standby instead of dropping
+the call, and `/health` plus `GET /api/tts/voices` always report which engine is
+speaking, the configured model/language, and why a failover happened.
+Verified by `tests/test_chatterbox_tts.py`, `scripts/verify_chatterbox.py` and
+the dashboard test panel (`POST /api/debug/speak`).
 
 ### Primary: ElevenLabs v3 (cloud, expressive)
 | Setting | Value | Purpose |
@@ -112,10 +186,36 @@ Run it (installs ~1.5-2 GB of CPU torch + weights on first run):
 Then open http://localhost:8880 in a browser for Kokoro's own web player.
 
 
+### Hearing the bot with no keys (offline neural voices)
+
+If the machine cannot download the multi-GB Kokoro/ChatterBox models (or has no
+keys), run the bundled **Piper/ONNX neural server**. It speaks the same
+OpenAI-compatible wire format, so the dashboard's *Test voice*, the debug
+console's live call and the call recordings all work unchanged — and the audio is
+a real neural voice, so a clone or a blend can be judged by ear rather than
+guessed at.
+
+```bash
+.venv/bin/pip install piper-tts onnxruntime                        # once
+.venv/bin/python scripts/fetch_neural_voices.py                    # 3 voices, ~60 MB each
+.venv/bin/python scripts/neural_tts_server.py --port 8880 --warm   # then PIPER_BASE_URL=http://localhost:8880
+curl -s localhost:8880/health | python -m json.tool                # what is loaded
+```
+
+`TTS_PROVIDER=piper` uses it as the live voice; `TTS_STANDBY_PROVIDER` can point
+at another engine for automatic failover. Renders take ~0.3 s per line on CPU.
+
+**Can't hear anything?** Two browser-side causes are handled for you now:
+*Test voice* in the dashboard plays the clip immediately (no second click), and
+the debug console resumes the page's `AudioContext` — Chrome starts it
+*suspended* when it is created outside a click handler, which plays the call
+silently. Click anywhere on the page to unlock sound. Every call is also saved
+under **Call recordings**: press play there to hear the exact bytes the bot sent.
+
 ## Configuration highlights (env)
 | Key | Purpose |
 |-----|---------|
-| `MIN_ELIGIBLE_AGE` / `MAX_ELIGIBLE_AGE` | eligibility window (default 45–80) |
+| `MIN_AGE` / `MAX_AGE` | fallback eligibility window (default 50–85); **each campaign's own per-step ages govern the live call** |
 | `POSITIVE_CONFIDENCE_THRESHOLD` | transfer threshold (default 0.85) |
 | `CLOSER_QUEUE` / `CLOSER_EXTENSION` | where qualified leads go |
 | `VICIDIAL_URL` / `VICIDIAL_USER` / `VICIDIAL_PASS` | disposition logging |

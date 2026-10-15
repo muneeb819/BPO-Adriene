@@ -229,9 +229,24 @@ def _output_setup() -> tuple[dict[str, str], bool]:
     return glyphs, ansi and sys.stdout.isatty()
 
 
+def _default_url() -> str:
+    """Probe the port the project is actually configured to serve on.
+
+    Hard-coding 9000 made the report claim "server not running" for anyone on
+    the default PORT=8000. Follow .env / the environment instead.
+    """
+    try:
+        from agent.config import Config
+
+        return f"http://localhost:{Config.load().port}"
+    except Exception:
+        return "http://localhost:8000"
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="Readiness report for the voice fronter.")
-    ap.add_argument("--url", default="http://localhost:9000", help="server base URL")
+    ap.add_argument("--url", default=_default_url(),
+                    help="server base URL (default: the configured PORT)")
     ap.add_argument("--offline", action="store_true", help="skip live server checks")
     args = ap.parse_args()
 
