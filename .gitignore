@@ -42,6 +42,9 @@ ENV/
 .DS_Store
 Thumbs.db
 
+# QA runner outputs (per-scenario JSON, WAV clips, and CSV summaries)
+backend/qa_outputs/
+
 # Data / generated audio (large files)
 # The Piper voices (~60 MB each) are fetched on demand, never committed:
 #   .venv/bin/python scripts/fetch_neural_voices.py
