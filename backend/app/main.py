@@ -5,6 +5,7 @@ from fastapi.staticfiles import StaticFiles
 from pathlib import Path
 from .core.state_machine import CallSession
 from .core.orchestrator import get_stt, get_media, get_llm, get_tts, get_transfer, get_runtime_config, set_runtime_config
+from .core.brain import get_memory, get_brain, normalize as brain_normalize, PROFILE as BRAIN_PROFILE
 from .db import init_db, get_session
 from .models import CallRecord, Transcript
 from .qa_endpoints import router as qa_router
@@ -53,6 +54,66 @@ async def update_config(payload: dict):
 @app.get('/api/config')
 async def get_config():
     return get_runtime_config()
+
+
+# ---------------- self-learning brain -------------------------------------
+@app.get("/api/brain/status")
+def brain_status():
+    """What the brain knows right now: persona, memory counts, LLM upgrade path."""
+    mem = get_memory()
+    brain = get_brain()
+    return {
+        "persona": BRAIN_PROFILE,
+        "llm_provider": brain.llm_provider or "local-brain",
+        "llm_upgrade_path": "set OPENAI_API_KEY / ANTHROPIC_API_KEY / GEMINI_API_KEY",
+        "memory": mem.status(),
+    }
+
+
+@app.get("/api/brain/memory")
+def brain_memory():
+    """Full memory dump: learned phrasings, queued unknowns, feedback log."""
+    return get_memory().dump()
+
+
+@app.post("/api/brain/feedback")
+def brain_feedback(payload: dict):
+    """👍/👎 from the dashboard. 'bad' + correct_intent makes the brain learn."""
+    utterance = payload.get("utterance") or ""
+    record = {
+        "utterance": utterance,
+        "utterance_norm": brain_normalize(utterance),
+        "verdict": payload.get("verdict") or "",
+        "intent": payload.get("intent") or "",
+        "bot_reply": payload.get("bot_reply") or "",
+        "state": payload.get("state") or "",
+        "correct_intent": payload.get("correct_intent") or "",
+        "correct_polarity": payload.get("correct_polarity"),
+        "corrected_reply": payload.get("corrected_reply") or "",
+        "topic": payload.get("topic") or "",
+        "session_id": payload.get("session_id") or "",
+    }
+    saved = get_memory().feedback(record)
+    return {"status": "learned" if record.get("correct_intent") else "recorded",
+            "record": saved, "memory": get_memory().status()}
+
+
+@app.post("/api/brain/learn")
+def brain_learn(payload: dict):
+    """Direct learning: tell the brain a phrasing and what it means."""
+    utterance = brain_normalize(payload.get("utterance") or "")
+    intent = (payload.get("intent") or "").strip()
+    if not utterance or not intent:
+        return JSONResponse({"error": "utterance and intent are required"},
+                            status_code=400)
+    ok = get_memory().learn(
+        utterance, intent,
+        payload.get("polarity") if payload.get("polarity") is None
+        else bool(payload.get("polarity")),
+        "api",
+    )
+    return {"learned": ok, "utterance": utterance, "intent": intent,
+            "memory": get_memory().status()}
 
 @app.post("/api/call/start")
 async def start_call(session: Session = Depends(get_session)):

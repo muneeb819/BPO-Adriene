@@ -1,32 +1,32 @@
 {
   "scenario_id": "scenario_confused_001",
   "name": "Confused Caller",
-  "started_at": "2026-10-16T02:51:09.412032Z",
+  "started_at": "2026-10-16T17:06:01.128873Z",
   "events": [
     {
       "turn": 0,
       "user": {
         "text": "Hi",
         "barge_in": false,
-        "start": "2026-10-16T02:51:09.412033Z",
-        "end": "2026-10-16T02:51:09.613382Z",
-        "stt_first_token": "2026-10-16T02:51:09.652983Z",
-        "stt_complete": "2026-10-16T02:51:09.689833Z"
+        "start": "2026-10-16T17:06:01.144201Z",
+        "end": "2026-10-16T17:06:01.344812Z",
+        "stt_first_token": "2026-10-16T17:06:01.391432Z",
+        "stt_complete": "2026-10-16T17:06:01.432982Z"
       },
       "agent": {
-        "text": "Hello Jane Roe, this is an automated benefits outreach. Do you have Medicare?",
-        "llm_first_token": "2026-10-16T02:51:09.840230Z",
-        "llm_complete": "2026-10-16T02:51:09.994230Z",
-        "tts_first_frame": "2026-10-16T02:51:10.030990Z",
-        "tts_end": "2026-10-16T02:51:11.570990Z",
+        "text": "Can't complain! Thanks for asking. Perfect \u2014 quick check, are you on Medicare right now?",
+        "llm_first_token": "2026-10-16T17:06:01.579998Z",
+        "llm_complete": "2026-10-16T17:06:01.755998Z",
+        "tts_first_frame": "2026-10-16T17:06:01.825679Z",
+        "tts_end": "2026-10-16T17:06:03.585679Z",
         "tts_audio": "C:\\Users\\Wave\\Downloads\\BPO-Adriene\\backend\\qa_outputs\\scenario_confused_001_turn_0_agent.wav"
       },
       "metrics": {
-        "stt_latency": 0.04,
-        "ttft": 0.227,
-        "tts_latency": 0.037,
-        "end_to_first_audio": 0.418,
-        "total_turn_time": 2.159
+        "stt_latency": 0.047,
+        "ttft": 0.235,
+        "tts_latency": 0.07,
+        "end_to_first_audio": 0.481,
+        "total_turn_time": 2.441
       }
     },
     {
@@ -34,25 +34,25 @@
       "user": {
         "text": "I'm not sure what Medicare is",
         "barge_in": false,
-        "start": "2026-10-16T02:51:10.412451Z",
-        "end": "2026-10-16T02:51:11.282592Z",
-        "stt_first_token": "2026-10-16T02:51:11.314611Z",
-        "stt_complete": "2026-10-16T02:51:11.337513Z"
+        "start": "2026-10-16T17:06:02.332829Z",
+        "end": "2026-10-16T17:06:03.203589Z",
+        "stt_first_token": "2026-10-16T17:06:03.257979Z",
+        "stt_complete": "2026-10-16T17:06:03.296286Z"
       },
       "agent": {
-        "text": "I can clarify \u2014 Medicare is federal health coverage for people over 65. Do you have a Medicare card?",
-        "llm_first_token": "2026-10-16T02:51:11.522942Z",
-        "llm_complete": "2026-10-16T02:51:11.722942Z",
-        "tts_first_frame": "2026-10-16T02:51:11.774773Z",
-        "tts_end": "2026-10-16T02:51:13.774773Z",
+        "text": "Sure \u2014 here's the plain version: Medicare is federal health insurance for people 65 and older, and for some younger people with disabilities or certain conditions. It's run by the federal government \u2014 parts A, B, C and D cover hospital, medical, plan and prescription costs. Got it. And do you have Medicare already?",
+        "llm_first_token": "2026-10-16T17:06:03.472139Z",
+        "llm_complete": "2026-10-16T17:06:04.104139Z",
+        "tts_first_frame": "2026-10-16T17:06:04.166379Z",
+        "tts_end": "2026-10-16T17:06:10.486379Z",
         "tts_audio": "C:\\Users\\Wave\\Downloads\\BPO-Adriene\\backend\\qa_outputs\\scenario_confused_001_turn_1_agent.wav"
       },
       "metrics": {
-        "stt_latency": 0.032,
-        "ttft": 0.24,
-        "tts_latency": 0.052,
-        "end_to_first_audio": 0.492,
-        "total_turn_time": 3.362
+        "stt_latency": 0.054,
+        "ttft": 0.269,
+        "tts_latency": 0.062,
+        "end_to_first_audio": 0.963,
+        "total_turn_time": 8.154
       }
     },
     {
@@ -60,25 +60,25 @@
       "user": {
         "text": "I think I might have it",
         "barge_in": false,
-        "start": "2026-10-16T02:51:11.478508Z",
-        "end": "2026-10-16T02:51:12.169321Z",
-        "stt_first_token": "2026-10-16T02:51:12.209643Z",
-        "stt_complete": "2026-10-16T02:51:12.235903Z"
+        "start": "2026-10-16T17:06:03.610003Z",
+        "end": "2026-10-16T17:06:04.300737Z",
+        "stt_first_token": "2026-10-16T17:06:04.341624Z",
+        "stt_complete": "2026-10-16T17:06:04.371437Z"
       },
       "agent": {
-        "text": "I can clarify \u2014 Medicare is federal health coverage for people over 65. Do you have a Medicare card?",
-        "llm_first_token": "2026-10-16T02:51:12.322261Z",
-        "llm_complete": "2026-10-16T02:51:12.522261Z",
-        "tts_first_frame": "2026-10-16T02:51:12.561876Z",
-        "tts_end": "2026-10-16T02:51:14.561876Z",
+        "text": "I'm doing well, thanks! Right back at you. Understood. Just to be sure I've got this right \u2014 do you currently have Medicare?",
+        "llm_first_token": "2026-10-16T17:06:04.596467Z",
+        "llm_complete": "2026-10-16T17:06:04.844467Z",
+        "tts_first_frame": "2026-10-16T17:06:04.881374Z",
+        "tts_end": "2026-10-16T17:06:07.361374Z",
         "tts_audio": "C:\\Users\\Wave\\Downloads\\BPO-Adriene\\backend\\qa_outputs\\scenario_confused_001_turn_2_agent.wav"
       },
       "metrics": {
-        "stt_latency": 0.04,
-        "ttft": 0.153,
-        "tts_latency": 0.04,
-        "end_to_first_audio": 0.393,
-        "total_turn_time": 3.083
+        "stt_latency": 0.041,
+        "ttft": 0.296,
+        "tts_latency": 0.037,
+        "end_to_first_audio": 0.581,
+        "total_turn_time": 3.751
       }
     }
   ],
@@ -88,7 +88,7 @@
     ],
     "clarification_requested": true
   },
-  "completed_at": "2026-10-16T02:51:12.449545Z",
+  "completed_at": "2026-10-16T17:06:04.646598Z",
   "checks": [
     {
       "assertion": "must_contain:Medicare",
