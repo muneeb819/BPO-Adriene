@@ -5,12 +5,14 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import importlib.util
 import json
 import os
 import secrets
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+from pathlib import Path
 
 from fastapi import FastAPI, Request, UploadFile, File, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, Response, JSONResponse, FileResponse
@@ -32,6 +34,23 @@ app = FastAPI(title="AI Voice Agent", lifespan=lifespan)
 CONFIG = Config.load()
 MODE = "turn-based"
 DEBUG = os.environ.get("DEBUG", "false").lower() in ("1", "true", "yes")
+
+# ---------------- QA reports (backend/scripts/qa_runner.py) ----------------
+# Mount the QA report/artifact router (shared with the local-debug backend) and serve
+# the static viewer, so http://<host>/qa_reports.html works against this server too.
+_QA_ENDPOINTS = Path(__file__).resolve().parents[1] / "backend" / "app" / "qa_endpoints.py"
+_spec = importlib.util.spec_from_file_location("qa_endpoints", _QA_ENDPOINTS)
+_qa = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_qa)
+app.include_router(_qa.router)
+
+_FRONTEND_PUBLIC = Path(__file__).resolve().parents[1] / "frontend" / "public"
+
+
+@app.get("/qa_reports.html")
+def qa_reports_page():
+    """Static QA Reports viewer (frontend/public/qa_reports.html)."""
+    return FileResponse(_FRONTEND_PUBLIC / "qa_reports.html", media_type="text/html")
 
 _DATA_DIR = os.environ.get("DATA_DIR", "data")
 CALL_LOG_PATH = os.path.join(_DATA_DIR, "call_log.json")
