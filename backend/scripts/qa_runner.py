@@ -1,20 +1,20 @@
 #!/usr/bin/env python3
-"""Simple QA runner for deterministic scenarios (mock-first).
-
-This runner is intentionally self-contained and does not require running the backend server.
-It simulates STT/LLM/TTS steps for deterministic scenario files under docs/scenarios/*.json
-and produces a structured report (JSON) plus generated per-turn TTS WAV files in outputs/.
+"""QA runner: run one or all deterministic scenarios and produce consolidated CSV results.
 
 Usage:
-  python backend/scripts/qa_runner.py --scenario ../../docs/scenarios/cooperative_caller.json
+  # Run a single scenario
+  python backend/scripts/qa_runner.py --scenario docs/scenarios/cooperative_caller.json
 
-Requirements (install in backend virtualenv):
-  pip install pyttsx3
+  # Run all scenarios under docs/scenarios/ and produce consolidated CSV
+  python backend/scripts/qa_runner.py --all
 
-Note: This runner is a lightweight QA utility aimed at quick local validation and audio preview.
-It is NOT a replacement for the full integrated test runner that exercises the live WebSocket
-mock-call flow. Use it to preview scenario behavior, generate audio samples, and produce
-structured scenario reports.
+Outputs:
+  - Per-scenario JSON report written to backend/qa_outputs/report_{scenario_id}.json
+  - Per-turn audio files written to backend/qa_outputs/turn_{n}_agent.wav (if pyttsx3 available)
+  - Consolidated CSV: backend/qa_outputs/results_summary.csv when --all is used
+
+This runner is intentionally self-contained and mock-first; it simulates STT/LLM/TTS steps
+for deterministic scenario files and is suitable for local QA preview.
 """
 
 import argparse
@@ -22,26 +22,30 @@ import json
 import os
 import time
 import random
+import csv
 from datetime import datetime
 from pathlib import Path
+import glob
 
 try:
     import pyttsx3
 except Exception:
     pyttsx3 = None
 
-OUTPUT_DIR = Path(__file__).resolve().parents[1] / 'qa_outputs'
+BASE = Path(__file__).resolve().parents[1]
+OUTPUT_DIR = BASE / 'qa_outputs'
+SCENARIO_DIR = BASE.parent / 'docs' / 'scenarios'
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 ENGINE = None
 if pyttsx3:
-    ENGINE = pyttsx3.init()
-    # reduce rate slightly for clarity
     try:
+        ENGINE = pyttsx3.init()
+        # reduce rate slightly for clarity
         rate = ENGINE.getProperty('rate')
         ENGINE.setProperty('rate', int(rate * 0.95))
     except Exception:
-        pass
+        ENGINE = None
 
 
 def synth_tts(text: str, out_file: Path):
@@ -53,9 +57,7 @@ def synth_tts(text: str, out_file: Path):
 
 
 def fake_llm_response(user_text: str, context: dict) -> str:
-    """Produce a deterministic, rule-based agent response for simple scenarios.
-    This is deliberately conservative and meant for QA preview only.
-    """
+    """Deterministic, rule-based agent response for simple QA scenarios."""
     ut = user_text.lower()
     if 'medicare' in ut:
         return "Thank you for confirming Medicare. Are you between 45 and 80 years old?"
@@ -72,12 +74,10 @@ def fake_llm_response(user_text: str, context: dict) -> str:
     return "Thanks for your reply. Can you please clarify?"
 
 
-def run_scenario(scenario_path: Path):
-    with scenario_path.open('r', encoding='utf-8') as f:
-        scenario = json.load(f)
-
+def run_scenario_dict(scenario: dict, output_dir: Path) -> dict:
+    """Run a scenario provided as a dictionary and return the generated report dict."""
     report = {
-        'scenario_id': scenario.get('id'),
+        'scenario_id': scenario.get('id') or scenario.get('scenario_id') or scenario.get('name'),
         'name': scenario.get('name'),
         'started_at': datetime.utcnow().isoformat() + 'Z',
         'events': [],
@@ -119,11 +119,15 @@ def run_scenario(scenario_path: Path):
 
         # TTS
         tts_start = llm_complete + random.uniform(0.01, 0.05)
-        tts_file = OUTPUT_DIR / f"turn_{turn_index}_agent.wav"
-        if pyttsx3:
-            synth_tts(agent_text, tts_file)
-            tts_first_frame = tts_start + 0.02
-            tts_end = tts_first_frame + max(0.5, len(agent_text) * 0.02)
+        tts_file = output_dir / f"{report['scenario_id']}_turn_{turn_index}_agent.wav"
+        if ENGINE:
+            try:
+                synth_tts(agent_text, tts_file)
+                tts_first_frame = tts_start + 0.02
+                tts_end = tts_first_frame + max(0.5, len(agent_text) * 0.02)
+            except Exception:
+                tts_first_frame = tts_start
+                tts_end = tts_start + 0.5
         else:
             tts_first_frame = tts_start
             tts_end = tts_start + 0.5
@@ -156,36 +160,83 @@ def run_scenario(scenario_path: Path):
     # must_contain
     musts = assertions.get('must_contain', [])
     for m in musts:
-        found = any(m.lower() in e['user']['text'].lower() or m.lower() in (e['agent']['text'] or '').lower() for e in report['events'])
+        found = any(m.lower() in (e['user']['text'] or '').lower() or m.lower() in (e['agent']['text'] or '').lower() for e in report['events'])
         checks.append({'assertion': f"must_contain:{m}", 'passed': bool(found)})
     # age_extraction
     expected_age = assertions.get('age_extraction')
     if expected_age:
         age_found = False
         for e in report['events']:
-            # find digit in user text
             import re
-            m = re.search(r"\b(\d{1,3})\b", e['user']['text'])
-            if m and int(m.group(1)) == expected_age:
+            mm = re.search(r"\b(\d{1,3})\b", e['user']['text'])
+            if mm and int(mm.group(1)) == expected_age:
                 age_found = True
                 break
         checks.append({'assertion': f'age_extraction:{expected_age}', 'passed': age_found})
+
     report['checks'] = checks
 
-    out_report = OUTPUT_DIR / f"report_{scenario.get('id')}.json"
+    # write report
+    out_report = output_dir / f"report_{report['scenario_id']}.json"
     with out_report.open('w', encoding='utf-8') as f:
         json.dump(report, f, indent=2)
 
-    print(f"Scenario run complete. Report written to: {out_report}")
-    return out_report
+    return report, out_report
+
+
+def run_all_scenarios(scenario_dir: Path, output_dir: Path, csv_out: Path):
+    scenario_files = sorted(glob.glob(str(scenario_dir / '*.json')))
+    results = []
+    for sfile in scenario_files:
+        print(f"Running scenario: {sfile}")
+        with open(sfile, 'r', encoding='utf-8') as f:
+            scenario = json.load(f)
+        report, rpt_path = run_scenario_dict(scenario, output_dir)
+        # summarize
+        total_checks = len(report.get('checks', []))
+        passed_checks = sum(1 for c in report.get('checks', []) if c.get('passed'))
+        overall_pass = total_checks == passed_checks if total_checks > 0 else True
+        results.append({
+            'scenario_id': report.get('scenario_id'),
+            'name': report.get('name'),
+            'started_at': report.get('started_at'),
+            'completed_at': report.get('completed_at'),
+            'total_turns': len(report.get('events', [])),
+            'total_checks': total_checks,
+            'passed_checks': passed_checks,
+            'overall_pass': overall_pass,
+            'report_path': str(rpt_path)
+        })
+
+    # write CSV
+    fieldnames = ['scenario_id','name','started_at','completed_at','total_turns','total_checks','passed_checks','overall_pass','report_path']
+    with open(csv_out, 'w', newline='', encoding='utf-8') as csvf:
+        writer = csv.DictWriter(csvf, fieldnames=fieldnames)
+        writer.writeheader()
+        for r in results:
+            writer.writerow(r)
+
+    print(f"All scenarios run. Summary CSV: {csv_out}")
+    return results
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='Run a deterministic scenario for QA preview')
-    parser.add_argument('--scenario', required=True, help='Path to scenario JSON file (relative to repo root)')
+    parser = argparse.ArgumentParser(description='Run QA scenarios (single or all)')
+    parser.add_argument('--scenario', help='Path to scenario JSON file')
+    parser.add_argument('--all', action='store_true', help='Run all scenarios under docs/scenarios')
     args = parser.parse_args()
-    scen_path = Path(args.scenario).resolve()
-    if not scen_path.exists():
-        print('Scenario file not found:', scen_path)
-        exit(1)
-    run_scenario(scen_path)
+
+    if args.all:
+        csv_out = OUTPUT_DIR / 'results_summary.csv'
+        run_all_scenarios(SCENARIO_DIR, OUTPUT_DIR, csv_out)
+    elif args.scenario:
+        scen_path = Path(args.scenario)
+        if not scen_path.exists():
+            print('Scenario file not found:', scen_path)
+            exit(1)
+        with scen_path.open('r', encoding='utf-8') as f:
+            scenario = json.load(f)
+        report, rpt_path = run_scenario_dict(scenario, OUTPUT_DIR)
+        print('Report written to:', rpt_path)
+    else:
+        parser.print_help()
