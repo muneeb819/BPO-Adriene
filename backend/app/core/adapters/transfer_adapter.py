@@ -35,9 +35,9 @@ class ViciDialTransferAdapter(TransferAdapter):
             self.enabled = False
     def transfer_call(self, session_id: str, target: str = None) -> bool:
         # Real implementation would call ViciDial API or instruct SIP server to warm transfer
-        # For now raise NotImplementedError to indicate adapter needs configuration
         if not getattr(self, 'enabled', False):
-            raise RuntimeError('ViciDial adapter not configured')
+            print('[ViciDial] adapter not configured; transfer skipped')
+            return False
         raise NotImplementedError('ViciDial transfer adapter not implemented')
 
 class TwilioSipTransferAdapter(TransferAdapter):
@@ -56,16 +56,16 @@ class TwilioSipTransferAdapter(TransferAdapter):
     def transfer_call(self, session_id: str, target: str = None) -> bool:
         # Real implementation would instruct Twilio or SIP to perform warm transfer
         if not getattr(self, 'enabled', False):
-            raise RuntimeError('Twilio adapter not configured')
+            print('[TwilioSIP] adapter not configured; transfer skipped')
+            return False
         raise NotImplementedError('Twilio SIP transfer adapter not implemented')
 
 
 def get_transfer_adapter() -> TransferAdapter:
-    provider = os.getenv('TRANSFER_PROVIDER', TRANSFER_PROVIDER)
-    if provider == 'mock':
-        return MockTransferAdapter()
+    provider = os.getenv('TRANSFER_PROVIDER', TRANSFER_PROVIDER).lower()
     if provider == 'vici':
         return ViciDialTransferAdapter()
     if provider == 'twilio':
         return TwilioSipTransferAdapter()
-    raise NotImplementedError(f"Transfer provider {provider} not implemented")
+    # mock + anything unknown: a live call must never die on transfer wiring
+    return MockTransferAdapter()

@@ -59,7 +59,21 @@ async def update_config(payload: dict):
 
 @app.get('/api/config')
 async def get_config():
-    return get_runtime_config()
+    cfg = get_runtime_config()
+    # what is ACTUALLY running (adapter classes resolve at call time; a
+    # cloud provider without a key still runs the local fallback)
+    def _name(adapter):
+        return type(adapter).__name__
+    cfg['_active'] = {
+        'stt': _name(get_stt()),
+        'tts': _name(get_tts()),
+        'llm': _name(get_llm()),
+        'media': _name(get_media()),
+        'transfer': _name(get_transfer()),
+        'tts_engine': 'kokoro-local' if kokoro_tts.available() else 'browser-client',
+        'llm_engine': (get_brain().llm_provider or 'local-brain'),
+    }
+    return cfg
 
 
 # ---------------- self-learning brain -------------------------------------
@@ -256,8 +270,12 @@ async def websocket_call(websocket: WebSocket, session_id: str):
                         db_rec.updated_at = datetime.now(timezone.utc)
                         dbconn.add(db_rec)
                         dbconn.commit()
-                        # trigger transfer event via adapter
-                        transfer_adapter.transfer_call(session_id)
+                        # trigger transfer event via adapter (never let
+                        # transfer wiring kill a live call)
+                        try:
+                            transfer_adapter.transfer_call(session_id)
+                        except Exception as e:
+                            print(f"[transfer] adapter error (call continues): {e}")
                         media.stop_call(session_id)
                         await websocket.send_json({"type": "transfer", "message": "transfer_triggered"})
                         await websocket.close()

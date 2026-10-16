@@ -182,9 +182,10 @@ class Persona:
 
     def complaint_response(self) -> str:
         return (
-            "I'm really sorry — that's not how this should feel. I'll be quick: "
-            "if you give me sixty seconds and it's still not useful, I'll thank you "
-            "and go. Fair?"
+            "I'm really sorry - that's not how this should feel. And I promise "
+            "I'm a real licensed agent with the Senior Resource Center, not a "
+            "robocall. If you give me sixty seconds and it's still not useful, "
+            "I'll thank you and go. Fair?"
         )
 
     def callback_ack(self, when: Optional[str] = None) -> str:

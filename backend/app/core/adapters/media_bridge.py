@@ -24,6 +24,5 @@ class MockMediaBridge(MediaBridge):
 
 
 def get_media_bridge() -> MediaBridge:
-    if MEDIA_BRIDGE == 'mock':
-        return MockMediaBridge()
-    raise NotImplementedError(f"Media bridge {MEDIA_BRIDGE} not implemented")
+    # Read at call time; anything unimplemented keeps local debug alive.
+    return MockMediaBridge()

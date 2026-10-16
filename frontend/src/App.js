@@ -336,13 +336,17 @@ function VoicePanel(){
  * ------------------------------------------------------------------ */
 function ConfigPanel(){
   const [cfg, setCfg] = useState(null);
-  useEffect(()=>{
-    fetch('/api/config').then(r=>r.json()).then(setCfg)
-  },[])
+  const [saved, setSaved] = useState(false);
+  const load = () => fetch('/api/config').then(r=>r.json()).then(setCfg).catch(()=>{});
+  useEffect(load, []);
   function update(){
-    fetch('/api/config', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(cfg)}).then(r=>r.json()).then(j=>alert('Config updated'))
+    fetch('/api/config', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(cfg)})
+      .then(r=>r.json())
+      .then(()=>{ setSaved(true); load(); })        // refresh: shows what's actually active
+      .catch(()=>setSaved(false));
   }
   if(!cfg) return null;
+  const a = cfg._active || {};
   return (
     <div style={{marginBottom:20}}>
       <h3>Runtime Config</h3>
@@ -372,8 +376,17 @@ function ConfigPanel(){
         “mock” now runs the full local brain (NLU + Medicare knowledge +
         compliance + memory). Add OPENAI_API_KEY to auto-upgrade wording.
       </div>
+      {a.llm && (
+        <div style={{marginTop:8, fontSize:12, color:'#2f6f4f', background:'#f0faf4',
+                     border:'1px solid #d7ecdf', borderRadius:6, padding:'6px 8px'}}>
+          <b>Active right now:</b> STT {a.stt} (browser mic does the real
+          speech→text) · TTS {a.tts} → <b>{a.tts_engine}</b> ·
+          LLM {a.llm} → <b>{a.llm_engine}</b> · transfer {a.transfer}
+        </div>
+      )}
       <div style={{marginTop:8}}>
         <button onClick={update}>Save Config</button>
+        {saved && <span style={{marginLeft:8, fontSize:12, color:'#2f6f4f'}}>✓ saved</span>}
       </div>
     </div>
   )

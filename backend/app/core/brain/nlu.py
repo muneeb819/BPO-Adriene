@@ -285,6 +285,8 @@ _INTENT_RULES: List[tuple] = [
         "ridiculous", "waste of time", "annoying", "angry", "unacceptable",
         "terrible", "worst", "frustrat", "upset", "sick of", "tired of",
         "harassing", "harassment", "lawsuit", "illegal", "creepy",
+        "reporting you", "report you", "report this", "scammer", "fraud",
+        "attorney general", "better business", "hang up on you",
     ]),
     ("identity_query", [
         "who is this", "who is that", "who's this", "who am i talking to",
@@ -314,7 +316,7 @@ _INTENT_RULES: List[tuple] = [
         "come again", "say that again", "pardon", "did not catch", "huh",
         "what was that", "i do not follow", "lost me", "unclear", "explain",
     ]),
-    ("greeting", ["hello", "hi there", "hey", "hi", "good morning", "good afternoon",
+    ("greeting", ["hello", "hi there", "hiya", "hey", "hi", "good morning", "good afternoon",
                   "good evening", "howdy", "yo", "morning", "afternoon", "evening"]),
     ("smalltalk", [
         "how are you", "how is it going", "how you doing", "i am fine", "i am good",
@@ -353,10 +355,23 @@ class Utterance:
     learned: Optional[Dict] = None
 
 
+def _pat_in(pattern: str, norm: str) -> bool:
+    """Intent pattern match.
+
+    Short single-word patterns ("hi", "yo", "bye", "huh") need word
+    boundaries — raw substring matching would fire "hi" inside "this" or
+    "thingy" and "yo" inside "your", hijacking complaints into smalltalk.
+    Longer phrases keep substring semantics (they carry their own context).
+    """
+    if " " in pattern or len(pattern) > 4:
+        return pattern in norm
+    return re.search(r"\b" + re.escape(pattern) + r"\b", norm) is not None
+
+
 def _score_intent(norm: str) -> tuple[str, int]:
     best, best_hits = "unknown", 0
     for intent, patterns in _INTENT_RULES:
-        hits = sum(1 for p in patterns if p in norm)
+        hits = sum(1 for p in patterns if _pat_in(p, norm))
         if hits > best_hits:
             best, best_hits = intent, hits
         if best_hits >= 2:

@@ -11,8 +11,6 @@ from typing import List
 
 from ..brain import get_brain
 
-LLM_PROVIDER = os.getenv("LLM_PROVIDER", "mock")
-
 
 class LLMAdapter:
     def generate(self, system_prompt: str, messages: List[dict]) -> str:
@@ -41,10 +39,7 @@ class MockLLM(LLMAdapter):
 
 
 def get_llm_adapter() -> LLMAdapter:
-    # Provider plumbing stays config-driven; unknown/absent keys fall back to
-    # the local brain instead of crashing a live call.
-    if LLM_PROVIDER == "mock" or (LLM_PROVIDER == "openai" and not os.getenv("OPENAI_API_KEY")):
-        return MockLLM()
-    if LLM_PROVIDER == "openai":
-        return MockLLM()          # Brain.generate re-words via the real API
-    raise NotImplementedError(f"LLM provider {LLM_PROVIDER} not implemented")
+    # Provider is read at call time so runtime switching works. Every value
+    # (mock/openai/anthropic/gemini/unknown) maps to the local brain first —
+    # Brain.generate upgrades wording automatically when a key is present.
+    return MockLLM()

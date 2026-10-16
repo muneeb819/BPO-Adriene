@@ -1,11 +1,18 @@
 """TTS adapter interface and local-first implementations.
 
-MockTTS (the default) synthesizes with the local Kokoro-82M model when it is
-installed, and returns empty bytes otherwise (the browser voice engine takes
-over client-side in that case).
+Providers are resolved at CALL time from the runtime config (switching in
+the config panel takes effect immediately). Every provider degrades to the
+local stack instead of crashing a live call:
+
+    mock / kokoro  -> MockTTS: Kokoro-82M neural voices when installed,
+                      empty bytes otherwise (browser engine takes over)
+    elevenlabs etc -> same local fallback until a key + implementation exist
+
+The empty-bytes contract means "no server-side audio" — the frontend then
+speaks with the browser voice engine, so a call is never left silent.
 """
 import os
-TTS_PROVIDER = os.getenv("TTS_PROVIDER", "mock")
+
 
 class TTSAdapter:
     def synthesize_to_bytes(self, text: str) -> bytes:
@@ -25,6 +32,6 @@ class MockTTS(TTSAdapter):
         return b""
 
 def get_tts_adapter() -> TTSAdapter:
-    if TTS_PROVIDER in ("mock", "kokoro"):
-        return MockTTS()
-    raise NotImplementedError(f"TTS provider {TTS_PROVIDER} not implemented")
+    # kokoro IS the local neural engine; every other provider currently maps
+    # to the same local-first behavior (no cloud keys configured).
+    return MockTTS()

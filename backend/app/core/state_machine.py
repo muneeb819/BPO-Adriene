@@ -279,7 +279,12 @@ class CallSession:
             if age_ent:
                 d["age"] = age_ent["age"]
                 changed = True
-            if pol is not None and age_ent is None:
+            if plan:
+                # plan talk answers the MEDICARE question, not the age one —
+                # "I've had Part B for years" must not count as "yes, I'm 45-80"
+                d["has_medicare"] = plan not in _OTHER_COVERAGE
+                changed = True
+            if pol is not None and age_ent is None and not plan:
                 d["age_verified"] = pol
                 changed = True
             if not changed:
