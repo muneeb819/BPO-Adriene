@@ -80,6 +80,12 @@ async def get_config():
 
 
 # ---------------- self-learning brain -------------------------------------
+@app.get("/api/health")
+def health():
+    """Liveness probe for docker HEALTHCHECK / load balancers."""
+    return {"status": "ok"}
+
+
 @app.get("/api/brain/status")
 def brain_status():
     """What the brain knows right now: persona, memory counts, LLM upgrade path."""
@@ -88,6 +94,7 @@ def brain_status():
     return {
         "persona": BRAIN_PROFILE,
         "llm_provider": brain.llm_provider or "local-brain",
+        "llm_ready": brain.llm_available,
         "llm_upgrade_path": "set OPENAI_API_KEY / ANTHROPIC_API_KEY / GEMINI_API_KEY",
         "memory": mem.status(),
     }

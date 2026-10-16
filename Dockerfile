@@ -1,58 +1,65 @@
 # =============================================================================
-#  BPO Adriene — AI Voice Fronter
+#  BPO Adriene — AI Voice Bot
 #
-#  One container runs both processes (neural voice server on :8880 and the app
-#  on :8000) via deploy/docker-entrypoint.sh:
+#  One image runs everything: FastAPI (REST + WebSocket call flow) with the
+#  Kokoro-82M neural voice engine in-process, serving the built React console
+#  on a single port.
 #
-#     docker build -t bpo-adriene .
-#     docker run -d --name bpo-adriene -p 8000:8000 \
-#       -v "$PWD/data:/app/data" --env-file .env bpo-adriene
+#    docker build -t bpo-adriene .
+#    cp .env.example .env          # set SECRET_KEY (and any LLM key)
+#    docker compose up -d
+#    open http://localhost:8055/
 #
-#  Voices (~190 MB) download into /app/data/models on first start, so mounting
-#  ./data keeps them across restarts. `--build-arg FETCH_VOICES=1` bakes them
-#  into the image instead.
+#  First start downloads the Kokoro model (~330 MB) into the hf-cache volume
+#  (~40 s); every start after that is instant.
 # =============================================================================
-FROM python:3.12-slim
 
-ARG FETCH_VOICES=0
+# --- stage 1: build the React console ---------------------------------------
+FROM node:20-alpine AS webbuild
+WORKDIR /web
+COPY frontend/package.json frontend/package-lock.json ./
+RUN npm ci --no-audit --no-fund
+COPY frontend/public ./public
+COPY frontend/src ./src
+RUN npm run build
+
+# --- stage 2: backend + voice engine ----------------------------------------
+FROM python:3.12-slim
 
 ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
-    PIPER_BASE_URL=http://127.0.0.1:8880 \
-    KOKORO_BASE_URL=http://127.0.0.1:8880 \
-    HOST=0.0.0.0 \
-    PORT=8000
+    HF_HUB_DISABLE_XET=1 \
+    SECRET_KEY=change-me \
+    DATABASE_URL=sqlite:////app/data/dev.db \
+    BRAIN_MEMORY_PATH=/app/data/brain_memory.json \
+    TTS_PROVIDER=kokoro \
+    TTS_VOICE=af_heart \
+    TTS_SPEED=1.0 \
+    STT_PROVIDER=mock \
+    LLM_PROVIDER=mock \
+    TRANSFER_PROVIDER=mock \
+    MEDIA_BRIDGE=mock
 
 WORKDIR /app
 
-# libsndfile is what `soundfile` needs to decode mp3/flac/ogg uploads in the
-# voice studio; the neural engine itself needs nothing beyond pip packages.
-RUN apt-get update \
- && apt-get install -y --no-install-recommends libsndfile1 \
- && rm -rf /var/lib/apt/lists/*
+# CPU-only torch (~200 MB) — deliberately NOT the CUDA build. Installed first
+# so kokoro's torch dependency is already satisfied and never pulls CUDA.
+RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
 
-COPY requirements.txt ./
-RUN pip install --upgrade pip && pip install -r requirements.txt
+COPY backend/requirements.txt ./backend/requirements.txt
+RUN pip install --no-cache-dir -r backend/requirements.txt
 
-COPY . .
+COPY backend/ ./backend/
+COPY --from=webbuild /web/build ./frontend/build
+COPY frontend/public ./frontend/public
 
-# Optionally bake the voice models into the image (adds ~190 MB)
-RUN if [ "$FETCH_VOICES" = "1" ]; then python scripts/fetch_neural_voices.py; fi
+# /app/data holds the SQLite call log + self-learning memory (mount a volume
+# there to keep them). The Kokoro model lives in /root/.cache/huggingface.
+RUN mkdir -p /app/data
 
-RUN mkdir -p data/models/piper logs && chmod +x deploy/docker-entrypoint.sh
+EXPOSE 8055
 
-EXPOSE 8000 8880
+HEALTHCHECK --interval=30s --timeout=5s --start-period=180s --retries=3 \
+    CMD python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8055/api/health', timeout=4).status==200 else 1)"
 
-HEALTHCHECK --interval=30s --timeout=5s --start-period=90s --retries=3 \
-    CMD python - <<'PY' || exit 1
-import json, urllib.request
-app = json.loads(urllib.request.urlopen("http://127.0.0.1:8000/health", timeout=3).read())
-assert app.get("status") == "ok", app
-try:
-    voice = json.loads(urllib.request.urlopen("http://127.0.0.1:8880/health", timeout=3).read())
-    assert voice.get("voices"), voice
-except Exception:
-    pass          # the app is healthy even when the voice engine is not running
-PY
-
-CMD ["deploy/docker-entrypoint.sh"]
+CMD ["python", "-m", "uvicorn", "backend.app.main:app", "--host", "0.0.0.0", "--port", "8055"]

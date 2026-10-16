@@ -47,32 +47,73 @@ class Brain:
                  max_tokens: int = 400, temperature: float = 0.6) -> Optional[str]:
         """Optional cloud re-wording of a decision made by the policy layer.
 
+        Plain stdlib HTTP (no SDK dependency) so the upgrade works in any
+        deployment the moment a key exists in the environment:
+
+            OPENAI_API_KEY / OPENAI_MODEL          (default gpt-4o-mini)
+            ANTHROPIC_API_KEY / ANTHROPIC_MODEL    (default claude-sonnet-4-5)
+            GEMINI_API_KEY (or GOOGLE_API_KEY) / GEMINI_MODEL
+                                                   (default gemini-2.0-flash)
+
         Returns None (caller falls back to the local persona) on any failure —
-        a live call must never die because a key expired.
+        a live call must never die because a key expired or a host is down.
         """
         provider = self.llm_provider
         if not provider:
             return None
         try:
+            import json as _json
+            import urllib.request
+
+            def _post(url: str, payload: dict, headers: dict, timeout: float = 8):
+                req = urllib.request.Request(
+                    url, data=_json.dumps(payload).encode(),
+                    headers={"Content-Type": "application/json", **headers})
+                with urllib.request.urlopen(req, timeout=timeout) as resp:
+                    return _json.loads(resp.read())
+
             if provider == "openai":
-                import openai
-                client = openai.OpenAI()
-                r = client.chat.completions.create(
-                    model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
-                    messages=[{"role": "system", "content": system_prompt}] + messages,
-                    max_tokens=max_tokens, temperature=temperature,
-                    timeout=8,
-                )
-                return (r.choices[0].message.content or "").strip() or None
+                data = _post(
+                    "https://api.openai.com/v1/chat/completions",
+                    {"model": os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
+                     "messages": [{"role": "system", "content": system_prompt}] + messages,
+                     "max_tokens": max_tokens, "temperature": temperature},
+                    {"Authorization": f"Bearer {os.getenv('OPENAI_API_KEY', '')}"})
+                text = (data["choices"][0]["message"].get("content") or "")
+                return text.strip() or None
+
             if provider == "anthropic":
-                import anthropic
-                client = anthropic.Anthropic()
-                r = client.messages.create(
-                    model=os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-5"),
-                    max_tokens=max_tokens, temperature=temperature,
-                    system=system_prompt, messages=messages, timeout=8,
-                )
-                return (r.content[0].text if r.content else "").strip() or None
+                data = _post(
+                    "https://api.anthropic.com/v1/messages",
+                    {"model": os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-5"),
+                     "max_tokens": max_tokens, "temperature": temperature,
+                     "system": system_prompt, "messages": messages},
+                    {"x-api-key": os.getenv("ANTHROPIC_API_KEY", ""),
+                     "anthropic-version": "2023-06-01"})
+                parts = data.get("content") or []
+                text = parts[0].get("text", "") if parts else ""
+                return text.strip() or None
+
+            if provider == "gemini":
+                model = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
+                key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or ""
+                contents = [
+                    {"role": "user" if m.get("role") == "user" else "model",
+                     "parts": [{"text": m.get("content", "")}]}
+                    for m in messages
+                ]
+                data = _post(
+                    f"https://generativelanguage.googleapis.com/v1beta/models/"
+                    f"{model}:generateContent?key={key}",
+                    {"contents": contents,
+                     "systemInstruction": {"parts": [{"text": system_prompt}]},
+                     "generationConfig": {"maxOutputTokens": max_tokens,
+                                          "temperature": temperature}},
+                    {})
+                cands = data.get("candidates") or [{}]
+                parts = (cands[0].get("content") or {}).get("parts") or []
+                text = parts[0].get("text", "") if parts else ""
+                return text.strip() or None
         except Exception as e:                       # noqa: BLE001
             print(f"[brain] LLM re-word failed ({provider}): {e}")
         return None

@@ -368,13 +368,20 @@ function ConfigPanel(){
       <div>
         <label>LLM Provider: </label>
         <select value={cfg.LLM_PROVIDER} onChange={e=>setCfg({...cfg, LLM_PROVIDER: e.target.value})}>
-          <option value="mock">mock</option>
+          <option value="mock">mock (local brain)</option>
           <option value="openai">openai</option>
+          <option value="anthropic">anthropic</option>
+          <option value="gemini">gemini</option>
         </select>
       </div>
       <div style={{marginTop:8, fontSize:12, color:'#555'}}>
-        “mock” now runs the full local brain (NLU + Medicare knowledge +
-        compliance + memory). Add OPENAI_API_KEY to auto-upgrade wording.
+        “mock” runs the full local brain (NLU + Medicare knowledge + compliance +
+        memory). To attach a real LLM, just set the env key — no code change:
+        <code> OPENAI_API_KEY</code> · <code>ANTHROPIC_API_KEY</code> ·
+        <code> GEMINI_API_KEY</code> (models via <code>OPENAI_MODEL</code> /
+        <code>ANTHROPIC_MODEL</code> / <code>GEMINI_MODEL</code>). The brain
+        then re-words its decisions through the model; any failure falls back
+        to the local voice instantly, so a call never dies.
       </div>
       {a.llm && (
         <div style={{marginTop:8, fontSize:12, color:'#2f6f4f', background:'#f0faf4',

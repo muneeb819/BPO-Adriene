@@ -26,7 +26,8 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 
-DEFAULT_PATH = Path(__file__).resolve().parents[3] / "brain_memory.json"
+DEFAULT_PATH = Path(os.getenv("BRAIN_MEMORY_PATH") or
+                    Path(__file__).resolve().parents[3] / "brain_memory.json")
 
 _MAX_ITEMS = 500          # cap learned/unknown lists
 _RECENT = 60              # exchanges kept for context
