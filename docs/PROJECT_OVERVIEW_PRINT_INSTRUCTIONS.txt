@@ -1,0 +1,34 @@
+PROJECT_OVERVIEW export instructions
+
+The file docs/PROJECT_OVERVIEW.svg is a printable single-slide summary. Convert it to PNG or PDF using one of the following commands on your machine.
+
+1) Using Inkscape (recommended)
+
+- Convert to PNG (1200x675):
+  inkscape docs/PROJECT_OVERVIEW.svg --export-type=png --export-filename=docs/PROJECT_OVERVIEW.png --export-width=1200 --export-height=675
+
+- Convert to PDF:
+  inkscape docs/PROJECT_OVERVIEW.svg --export-type=pdf --export-filename=docs/PROJECT_OVERVIEW.pdf
+
+2) Using rsvg-convert (Linux)
+
+- Install: apt-get install librsvg2-bin
+- Convert to PNG:
+  rsvg-convert -w 1200 -h 675 docs/PROJECT_OVERVIEW.svg -o docs/PROJECT_OVERVIEW.png
+- Convert to PDF (via CairoSVG or using imagemagick):
+  cairosvg docs/PROJECT_OVERVIEW.svg -o docs/PROJECT_OVERVIEW.pdf
+
+3) Using ImageMagick (if SVG support is enabled)
+
+- Convert to PNG:
+  convert -background none docs/PROJECT_OVERVIEW.svg -resize 1200x675 docs/PROJECT_OVERVIEW.png
+
+4) Using headless Chrome (works cross-platform)
+
+- Create a tiny HTML wrapper:
+  printf '%s' "<html><body style='margin:0'><img src='PROJECT_OVERVIEW.svg' width='1200' /></body></html>" > /tmp/ov.html
+- Use Chrome to save as PDF or print to PDF using headless printing tools.
+
+Notes
+- The SVG is vector and prints crisply at any DPI. Use the PDF export for best print quality.
+- If you want, I can also commit a pre-rendered PNG and PDF into the repo; tell me and I will produce and push them for you.
