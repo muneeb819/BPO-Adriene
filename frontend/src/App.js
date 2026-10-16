@@ -1,41 +1,31 @@
-diff --git a/frontend/src/App.js b/frontend/src/App.js
-index 0000000..0000000
---- a/frontend/src/App.js
-+++ b/frontend/src/App.js
+*** Begin Patch
+*** Update File: frontend/src/App.js
 @@
- function ConfigPanel(){
-   const [cfg, setCfg] = useState(null);
-+  const [creds, setCreds] = useState([]);
-+  const [newCred, setNewCred] = useState({provider:'openai', api_key:''});
+ function CallDetail({call}){
+   const [detail, setDetail] = useState(null);
    useEffect(()=>{
-     fetch('/api/config').then(r=>r.json()).then(setCfg)
-+    fetch('/api/credentials').then(r=>r.json()).then(setCreds)
-   },[])
-@@
-     <div style={{marginTop:8}}>
-       <button onClick={update}>Save Config</button>
-     </div>
-+    <div style={{marginTop:12, borderTop:'1px dashed #ddd', paddingTop:8}}>
-+      <h4>API Keys</h4>
-+      <div>
-+        <select value={newCred.provider} onChange={e=>setNewCred({...newCred, provider:e.target.value})}>
-+          <option value="openai">OpenAI</option>
-+          <option value="deepgram">Deepgram</option>
-+          <option value="elevenlabs">ElevenLabs</option>
-+        </select>
-+        <input placeholder="API key" value={newCred.api_key} onChange={e=>setNewCred({...newCred, api_key:e.target.value})} style={{marginLeft:8}} />
+     if(!call) return;
+     fetch(`http://localhost:8000/api/calls/${call.id}`).then(r=>r.json()).then(setDetail)
+   },[call])
+   if(!call) return null;
+   if(!detail) return <div>Loading...</div>
+   return (
+     <div>
+       <h3>Call Detail — {detail.session_id}</h3>
++      <div style={{marginBottom:8}}>
 +        <button onClick={async ()=>{
-+          await fetch('/api/credentials', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(newCred)});
-+          const c = await fetch('/api/credentials').then(r=>r.json());
-+          setCreds(c);
-+          setNewCred({provider:'openai', api_key:''});
-+        }} style={{marginLeft:8}}>Save Key</button>
++          const r = await fetch('/api/transfer/test', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({call_id: call.id})});
++          const j = await r.json();
++          if(r.ok) alert('Transfer test result: ' + j.status);
++          else alert('Transfer failed: ' + (j.error || JSON.stringify(j)));
++        }}>Test Transfer</button>
 +      </div>
-+      <div style={{marginTop:8}}>
-+        {creds.map((c,i)=> <div key={i}><strong>{c.provider}</strong>: {c.api_key_masked}</div>)}
-+      </div>
-+    </div>
-   </div>
+       <div style={{border:'1px solid #ddd', padding:10, maxHeight:300, overflow:'auto'}}>
+         {detail.transcripts.map((t,i)=> (
+           <div key={i}><strong>{t.role}:</strong> {t.text} <span style={{color:'#999'}}>{new Date(t.timestamp).toLocaleString()}</span></div>
+         ))}
+       </div>
+     </div>
    )
  }
 *** End Patch
