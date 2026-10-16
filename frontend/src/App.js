@@ -57,6 +57,8 @@ async function speakNeural(text){
     if(s.split(/\s+/).length < 4 && chunks.length) chunks[chunks.length-1] += ' ' + s;
     else chunks.push(s);
   });
+  // generous guard: CPU synth can be a few seconds per chunk
+  armSpeechEndGuard(chunks.reduce((a, c) => a + c.length * 0.09, 0) * 1000 + 15000);
   let pending = fetchChunk(chunks[0], voice, speed);   // prefetch first now…
   for(let i = 0; i < chunks.length; i++){
     const wavP = pending;
@@ -72,6 +74,7 @@ async function speakNeural(text){
     const ok = await playWav(wav, token);
     if(!ok){ return; }
   }
+  fireBotSpeechEnd();                                  // whole reply spoken — release the turn
 }
 
 function scoreVoice(v){
@@ -113,24 +116,97 @@ function speakBrowser(text, voices){
       u.pitch = Math.max(0.8, Math.min(1.5,
                  (empathetic ? 1.04 : 1.10) + (i % 2) * 0.05));
       u.volume = 1;
+      if(i === segments.length - 1) u.onend = fireBotSpeechEnd;   // turn is over
       synth.speak(u);
     }, i * 120);                                    // a breath between sentences
   });
+  // guard: if the browser swallows onend (known Chrome quirk after cancel),
+  // still release the turn so hands-free mode can re-arm the mic
+  const estMs = segments.reduce((a, s) => a + s.length / (13 * baseRate), 0) * 1000
+              + segments.length * 120 + 2500;
+  armSpeechEndGuard(estMs);
 }
 
 /* Engine-aware entry point: neural (Kokoro) when selected & ready,
  * browser speechSynthesis otherwise. */
+let botSpeaking = false;
+let onBotSpeechEndCb = null;    // App hooks this: re-arm the mic in hands-free mode
+let speechEndTimer = null;      // safety net — some browsers miss onend after cancel()
+let autoListen = false;         // App keeps these in sync (half-duplex mic gating)
+let dictationInst = null;
+
+function markBotSpeaking(){ botSpeaking = true; if(speechEndTimer){ clearTimeout(speechEndTimer); speechEndTimer = null; } }
+function fireBotSpeechEnd(){
+  if(!botSpeaking) return;
+  botSpeaking = false;
+  if(speechEndTimer){ clearTimeout(speechEndTimer); speechEndTimer = null; }
+  if(onBotSpeechEndCb) onBotSpeechEndCb();
+}
+function armSpeechEndGuard(ms){
+  if(speechEndTimer) clearTimeout(speechEndTimer);
+  speechEndTimer = setTimeout(fireBotSpeechEnd, ms);
+}
+
 function speak(text, voices){
   if(!text) return;
   stopNeural();                                     // cut any neural audio in flight
   speakToken++;                                     // and any queued browser lines
   if(window.speechSynthesis) window.speechSynthesis.cancel();
+  markBotSpeaking();
+  // hands-free mode is half-duplex: mute the mic while Adriene is talking
+  if(autoListen && dictationInst && dictationInst.active) dictationInst.stop();
   const eng = localStorage.getItem('adriene_engine') || 'auto';
   if((eng === 'neural' || eng === 'auto') && neuralReady){
     speakNeural(text);
     return;
   }
   speakBrowser(text, voices);
+}
+
+/* ------------------------------------------------------------------ *
+ *  Dictation — customer speaks, bot understands (browser SpeechRecognition).
+ *  Chrome/Edge on localhost; graceful error hints otherwise.
+ * ------------------------------------------------------------------ */
+const SRClass = (typeof window !== 'undefined') &&
+  (window.SpeechRecognition || window.webkitSpeechRecognition);
+
+class Dictation {
+  constructor(h){ this.h = h; this.rec = null; this.active = false; }
+  start(){
+    if(!SRClass){ this.h.onError('unsupported'); return false; }
+    if(this.active) return true;
+    try{
+      const rec = new SRClass();
+      this.rec = rec;
+      rec.lang = 'en-US';
+      rec.continuous = false;          // one utterance per arm; auto mode re-arms
+      rec.interimResults = true;       // live "hearing…" transcript
+      rec.maxAlternatives = 1;
+      rec.onstart = () => { this.active = true; this.h.onState(true); };
+      rec.onresult = (e) => {
+        let interim = '', final = '';
+        for(let i = e.resultIndex; i < e.results.length; i++){
+          const r = e.results[i];
+          if(r.isFinal) final += r[0].transcript; else interim += r[0].transcript;
+        }
+        if(interim) this.h.onInterim(interim);
+        if(final){
+          const text = final.trim();
+          this.h.onInterim('');
+          if(text) this.h.onFinal(text);
+        }
+      };
+      rec.onerror = (e) => {
+        if(e.error === 'not-allowed' || e.error === 'service-not-allowed') this.h.onError('denied');
+        else if(e.error === 'network') this.h.onError('network');
+        else if(e.error !== 'no-speech' && e.error !== 'aborted') this.h.onError(e.error);
+      };
+      rec.onend = () => { this.active = false; this.h.onState(false); this.h.onEnd(); };
+      rec.start();
+      return true;
+    }catch(err){ this.h.onError(String(err)); return false; }
+  }
+  stop(){ try{ if(this.rec) this.rec.stop(); }catch(e){} }
 }
 
 function VoicePanel(){
@@ -388,7 +464,82 @@ export default function App(){
   const [voices, setVoices] = useState([]);
   const [thinking, setThinking] = useState(false);
   const [lastUser, setLastUser] = useState('');
+  const [micOn, setMicOn] = useState(false);
+  const [interim, setInterim] = useState('');
+  const [micErr, setMicErr] = useState('');
+  const [autoMode, setAutoMode] = useState(false);
   const wsRef = useRef(null);
+  const autoRef = useRef(false);
+  const micOnRef = useRef(false);
+  const sessionRef = useRef(null);
+  const dictRef = useRef(null);
+
+  const micSupported = !!(typeof window !== 'undefined') &&
+    !!(window.SpeechRecognition || window.webkitSpeechRecognition);
+
+  function submitUtterance(text){
+    const t = (text || '').trim();
+    if(!t) return;
+    if(!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN){
+      setMessages(m => [...m, {from:'system', text: 'Call not open — press Start Mock Call first.'}]);
+      return;
+    }
+    wsRef.current.send(JSON.stringify({type: 'user_utterance', text: t}));
+    setMessages(m => [...m, {from:'user', text: t}]);
+    setLastUser(t);
+    setInput('');
+    setInterim('');
+    setThinking(true);
+  }
+
+  function startMic(quiet){
+    if(!sessionRef.current){
+      if(!quiet) setMicErr('Start the call first, then press 🎤.');
+      return;
+    }
+    // barge-in: cut Adriene off mid-sentence — the customer floor is live
+    stopNeural(); speakToken++;
+    if(window.speechSynthesis) window.speechSynthesis.cancel();
+    fireBotSpeechEnd();               // release the bot's turn cleanly
+    setInterim('');
+    setMicErr('');
+    dictRef.current.start();
+  }
+
+  if(!dictRef.current){
+    dictRef.current = new Dictation({
+      onFinal: (t) => submitUtterance(t),
+      onInterim: (t) => setInterim(t),
+      onState: (s) => { micOnRef.current = s; setMicOn(s); if(s) setMicErr(''); },
+      onError: (kind) => {
+        const msg = kind === 'denied'
+          ? 'Microphone blocked — allow mic access (icon in the address bar), then press 🎤 again.'
+          : kind === 'network'
+          ? 'Speech input needs an internet connection (Chrome voice typing). Typing still works.'
+          : kind === 'unsupported'
+          ? 'This browser has no speech recognition — use Chrome or Edge, or type instead.'
+          : 'Mic error: ' + kind;
+        setMicErr(msg);
+        autoRef.current = false; setAutoMode(false);
+      },
+      onEnd: () => {
+        // hands-free: re-arm unless Adriene is talking (half-duplex, no echo)
+        if(autoRef.current && !micOnRef.current && !botSpeaking){
+          setTimeout(() => { if(autoRef.current && !micOnRef.current && !botSpeaking) startMic(true); }, 350);
+        }
+      },
+    });
+  }
+  dictationInst = dictRef.current;
+
+  useEffect(()=>{
+    onBotSpeechEndCb = () => {
+      if(autoRef.current && sessionRef.current){
+        setTimeout(() => { if(autoRef.current && !micOnRef.current) startMic(true); }, 250);
+      }
+    };
+    return () => { onBotSpeechEndCb = null; };
+  },[]);
 
   useEffect(()=>{
     const load = () => setVoices(window.speechSynthesis ? window.speechSynthesis.getVoices() : []);
@@ -396,10 +547,22 @@ export default function App(){
     if(window.speechSynthesis) window.speechSynthesis.onvoiceschanged = load;
   },[]);
 
+  function toggleMic(){
+    if(micOnRef.current){ dictRef.current.stop(); autoRef.current = false; setAutoMode(false); }
+    else startMic(false);
+  }
+  function changeAuto(e){
+    const on = e.target.checked;
+    autoRef.current = on; autoListen = on; setAutoMode(on);
+    if(on){ if(sessionRef.current) startMic(true); setMicErr(''); }
+    else if(micOnRef.current){ dictRef.current.stop(); }
+  }
+
   async function startCall(){
     const res = await fetch('/api/call/start', {method: 'POST'});
     const j = await res.json();
     setSessionId(j.session_id);
+    sessionRef.current = j.session_id;
     setMessages(m => [...m, {from:'bot', text: j.bot_prompt}]);
     speak(j.bot_prompt, voices);
     const ws = new WebSocket(`${location.protocol === 'https:' ? 'wss://' : 'ws://'}${location.host}/ws/call/${j.session_id}`);
@@ -423,18 +586,7 @@ export default function App(){
     wsRef.current = ws;
   }
 
-  function sendUtterance(){
-    if(!input.trim()) return;
-    if(!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN){
-      setMessages(m => [...m, {from:'system', text: 'Call not open — press Start Mock Call first.'}]);
-      return;
-    }
-    wsRef.current.send(JSON.stringify({type: 'user_utterance', text: input}));
-    setMessages(m => [...m, {from:'user', text: input}]);
-    setLastUser(input);
-    setInput('');
-    setThinking(true);
-  }
+  function sendUtterance(){ submitUtterance(input); }
 
   function onKey(e){ if(e.key === 'Enter') sendUtterance(); }
 
@@ -508,10 +660,40 @@ export default function App(){
           {thinking && <div style={{color:'#888', fontStyle:'italic', marginLeft:6}}>Adriene is thinking…</div>}
         </div>
         <div style={{marginTop:10}}>
+          <button onClick={toggleMic} title={micOn ? 'Stop listening' : 'Speak your answer'}
+                  style={{padding:'8px 14px', marginRight:6, fontSize:16,
+                          background: micOn ? '#dc3545' : '#fff', color: micOn ? '#fff' : '#333',
+                          border: micOn ? '1px solid #b02a37' : '1px solid #ccc', borderRadius:8,
+                          cursor:'pointer'}}>
+            {micOn ? '⏹' : '🎤'}
+          </button>
           <input value={input} onChange={e=>setInput(e.target.value)} onKeyDown={onKey}
-                 placeholder="Answer naturally — any wording works…" style={{width:'70%', padding:8}} />
+                 placeholder={micOn ? 'Listening… (or type here)'
+                                    : 'Answer naturally — any wording works…'}
+                 style={{width:'62%', padding:8}} />
           <button onClick={sendUtterance} style={{padding:'8px 16px', marginLeft:6}}>Send</button>
+          <label style={{marginLeft:10, fontSize:13, cursor:'pointer', userSelect:'none'}}>
+            <input type="checkbox" checked={autoMode} onChange={changeAuto}
+                   disabled={!micSupported} style={{marginRight:4}} />
+            🔄 Hands-free (mic auto-listens after Adriene speaks)
+          </label>
         </div>
+        {interim && (
+          <div style={{color:'#1f6feb', fontSize:13, marginTop:4, fontStyle:'italic'}}>
+            🎤 hearing: “{interim}…”
+          </div>
+        )}
+        {micOn && !interim && (
+          <div style={{color:'#888', fontSize:12, marginTop:4}}>🎤 listening — go ahead, Adriene can hear you…</div>
+        )}
+        {micErr && (
+          <div style={{color:'#b02a37', fontSize:13, marginTop:4}}>⚠ {micErr}</div>
+        )}
+        {!micSupported && (
+          <div style={{color:'#8a6d00', fontSize:12, marginTop:4}}>
+            💡 Voice input works in Chrome/Edge — this browser only supports typing.
+          </div>
+        )}
         <div style={{marginTop:12, fontSize:12, color:'#555', lineHeight:1.6}}>
           <b>Try anything:</b> “nah, not yet” · “yeah I've had it for years” · “sixty-seven” ·
           “what's the difference between Advantage and Medigap?” · “is this a scam?” ·
