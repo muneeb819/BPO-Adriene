@@ -1,12 +1,15 @@
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Depends
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from pathlib import Path
 from .core.state_machine import CallSession
 from .core.orchestrator import get_stt, get_media, get_llm, get_tts, get_transfer, get_runtime_config, set_runtime_config
 from .db import init_db, get_session
 from .models import CallRecord, Transcript
 from .qa_endpoints import router as qa_router
 from sqlmodel import Session, select
+from datetime import datetime, timezone
 import uuid
 
 app = FastAPI(title="BPO-Adriene AI Voice Bot (local-debug)")
@@ -77,7 +80,7 @@ async def transfer_call(session_id: str, db: Session = Depends(get_session)):
     ok = transfer_adapter.transfer_call(session_id, target=None)
     if ok:
         db_rec.state = "transferred"
-        db_rec.updated_at = __import__('datetime').datetime.utcnow()
+        db_rec.updated_at = datetime.now(timezone.utc)
         db.add(db_rec)
         db.commit()
         return JSONResponse({"status": "transferring", "session_id": session_id})
@@ -138,7 +141,7 @@ async def websocket_call(websocket: WebSocket, session_id: str):
                     if should_transfer:
                         session_obj.state = "transferring"
                         db_rec.state = "transferring"
-                        db_rec.updated_at = __import__('datetime').datetime.utcnow()
+                        db_rec.updated_at = datetime.now(timezone.utc)
                         dbconn.add(db_rec)
                         dbconn.commit()
                         # trigger transfer event via adapter
@@ -153,3 +156,21 @@ async def websocket_call(websocket: WebSocket, session_id: str):
         print(f"Websocket disconnected for session {session_id}")
     finally:
         media.stop_call(session_id)
+
+
+# ---------------- UI: served by the API server (one origin for HTTP + WebSocket) ----------------
+FRONTEND_PUBLIC = Path(__file__).resolve().parents[2] / 'frontend' / 'public'
+FRONTEND_BUILD = Path(__file__).resolve().parents[2] / 'frontend' / 'build'
+
+
+@app.get('/qa_reports.html')
+def qa_reports_page():
+    """Static QA Reports viewer (frontend/public/qa_reports.html)."""
+    return FileResponse(FRONTEND_PUBLIC / 'qa_reports.html', media_type='text/html')
+
+
+if FRONTEND_BUILD.is_dir():
+    # Registered last, so /api/* and /ws/* above win. Serves the built React app
+    # (index.html + assets) — the browser then talks to the same origin it loaded
+    # from, which is what makes the WebSocket call flow work without a dev proxy.
+    app.mount('/', StaticFiles(directory=str(FRONTEND_BUILD), html=True), name='frontend')

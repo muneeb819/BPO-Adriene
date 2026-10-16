@@ -1,6 +1,6 @@
 from sqlmodel import SQLModel, create_engine, Session, select
 from typing import Optional
-from datetime import datetime
+from datetime import datetime, timezone
 import os
 
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./dev.db")
@@ -28,7 +28,7 @@ def upsert_credential(provider_name: str, encrypted_key: str):
         existing = session.exec(select(ProviderCredential).where(ProviderCredential.provider == provider_name)).first()
         if existing:
             existing.api_key_encrypted = encrypted_key
-            existing.updated_at = datetime.utcnow()
+            existing.updated_at = datetime.now(timezone.utc)
             session.add(existing)
             session.commit()
             session.refresh(existing)
