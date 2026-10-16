@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>QA Reports</title>
+  <style>
+    body { font-family: Inter, Arial, sans-serif; background:#0b1020; color:#e6eef8; padding:20px }
+    table { width:100%; border-collapse:collapse; margin-top:12px }
+    th,td { padding:8px; border-bottom:1px solid #1f2a44 }
+    th { text-align:left; color:#9fb3d9 }
+    .btn { background:#1f6feb; color:white; border:none; padding:6px 10px; border-radius:4px; cursor:pointer }
+    .small { font-size:0.9em; color:#a9bfdc }
+    audio { width:220px }
+    a.link { color:#7fd1ff }
+  </style>
+</head>
+<body>
+  <h1>QA Reports</h1>
+  <p class="small">Lists QA run reports and artifacts produced by the QA runner. Audio and CSV files can be downloaded or played inline.</p>
+
+  <div>
+    <button id="refreshBtn" class="btn">Refresh</button>
+    <a id="csvLink" class="link" href="#" style="margin-left:12px">Download consolidated CSV</a>
+  </div>
+
+  <table id="reportsTable">
+    <thead>
+      <tr><th>Scenario</th><th>Report File</th><th>Artifacts</th><th>Actions</th></tr>
+    </thead>
+    <tbody></tbody>
+  </table>
+
+  <script>
+    async function loadReports(){
+      const res = await fetch('/api/qa/reports');
+      const j = await res.json();
+      const tbody = document.querySelector('#reportsTable tbody');
+      tbody.innerHTML = '';
+      // set CSV link if available
+      const csvArtifact = j.artifacts.find(a => a.file && a.file.endsWith('results_summary.csv'));
+      const csvLink = document.getElementById('csvLink');
+      if(csvArtifact){
+        csvLink.href = '/api/qa/download/' + csvArtifact.file;
+        csvLink.textContent = 'Download consolidated CSV';
+      } else {
+        csvLink.href = '#';
+        csvLink.textContent = 'No CSV available'
+      }
+
+      for(const r of j.reports){
+        const tr = document.createElement('tr');
+        const scenarioTd = document.createElement('td'); scenarioTd.textContent = r.name || r.scenario_id;
+        const fileTd = document.createElement('td'); fileTd.textContent = r.file;
+        const artsTd = document.createElement('td');
+        // find related artifacts
+        const related = j.artifacts.filter(a => a.file.startsWith(r.file.replace('report_','').replace('.json','')) || a.file.includes(r.scenario_id));
+        if(related.length===0){ artsTd.textContent = '-'} else {
+          for(const a of related){
+            const d = document.createElement('div');
+            d.innerHTML = `<a class="link" href="/api/qa/download/${a.file}" target="_blank">${a.file}</a>`;
+            artsTd.appendChild(d);
+          }
+        }
+        const actionsTd = document.createElement('td');
+        const viewBtn = document.createElement('button'); viewBtn.className='btn'; viewBtn.textContent='View';
+        viewBtn.onclick = async ()=>{
+          const rres = await fetch(r.path); const rp = await rres.json();
+          // open simple viewer
+          const w = window.open('about:blank','_blank');
+          w.document.write('<pre style="white-space:pre-wrap; color:#0b1020; background:#fff; padding:12px">'+JSON.stringify(rp, null, 2)+'</pre>');
+        };
+        actionsTd.appendChild(viewBtn);
+
+        // audio previews: find files for this scenario
+        const audioDiv = document.createElement('div');
+        const audFiles = j.artifacts.filter(a=> a.file.endsWith('.wav') || a.file.endsWith('.mp3'));
+        // filter by scenario id
+        const scenId = r.scenario_id || r.file.replace('report_','').replace('.json','');
+        const matched = audFiles.filter(a=> a.file.includes(scenId));
+        for(const m of matched){
+          const ad = document.createElement('div');
+          ad.innerHTML = `<div style="margin-top:6px"><strong>${m.file}</strong><br><audio controls src="/api/qa/download/${m.file}"></audio></div>`;
+          actionsTd.appendChild(ad);
+        }
+
+        tr.appendChild(scenarioTd); tr.appendChild(fileTd); tr.appendChild(artsTd); tr.appendChild(actionsTd);
+        tbody.appendChild(tr);
+      }
+
+      // also show artifacts that are not tied to reports
+      const otherArts = j.artifacts.filter(a => !a.file.endsWith('.json'));
+      if(otherArts.length>0){
+        const tr = document.createElement('tr');
+        const td = document.createElement('td'); td.colSpan=4; td.style.paddingTop='12px';
+        td.innerHTML = '<strong>Other Artifacts</strong>';
+        for(const a of otherArts){
+          const div = document.createElement('div');
+          div.innerHTML = `<a class="link" href="/api/qa/download/${a.file}" target="_blank">${a.file}</a>`;
+          td.appendChild(div);
+        }
+        tr.appendChild(td);
+        tbody.appendChild(tr);
+      }
+    }
+
+    document.getElementById('refreshBtn').addEventListener('click', loadReports);
+    loadReports();
+  </script>
+</body>
+</html>
