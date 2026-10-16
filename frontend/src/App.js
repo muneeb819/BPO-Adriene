@@ -1,9 +1,55 @@
 import React, {useState, useEffect, useRef} from 'react';
 
+function Dashboard({onOpenCall}){
+  const [calls, setCalls] = useState([]);
+  useEffect(()=>{
+    fetch('http://localhost:8000/api/calls').then(r=>r.json()).then(setCalls)
+  },[])
+  return (
+    <div style={{marginBottom:20}}>
+      <h3>Recent Calls</h3>
+      <table style={{width:'100%',borderCollapse:'collapse'}}>
+        <thead><tr><th>ID</th><th>Session</th><th>State</th><th>Created</th></tr></thead>
+        <tbody>
+          {calls.map(c => (
+            <tr key={c.id} style={{borderTop:'1px solid #eee',cursor:'pointer'}} onClick={()=>onOpenCall(c)}>
+              <td>{c.id}</td>
+              <td>{c.session_id}</td>
+              <td>{c.state}</td>
+              <td>{new Date(c.created_at).toLocaleString()}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
+function CallDetail({call}){
+  const [detail, setDetail] = useState(null);
+  useEffect(()=>{
+    if(!call) return;
+    fetch(`http://localhost:8000/api/calls/${call.id}`).then(r=>r.json()).then(setDetail)
+  },[call])
+  if(!call) return null;
+  if(!detail) return <div>Loading...</div>
+  return (
+    <div>
+      <h3>Call Detail — {detail.session_id}</h3>
+      <div style={{border:'1px solid #ddd', padding:10, maxHeight:300, overflow:'auto'}}>
+        {detail.transcripts.map((t,i)=> (
+          <div key={i}><strong>{t.role}:</strong> {t.text} <span style={{color:'#999'}}>{new Date(t.timestamp).toLocaleString()}</span></div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 export default function App(){
   const [sessionId, setSessionId] = useState(null);
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
+  const [selectedCall, setSelectedCall] = useState(null);
   const wsRef = useRef(null);
 
   async function startCall(){
@@ -46,22 +92,27 @@ export default function App(){
   return (
     <div style={{padding:20,fontFamily:'Arial'}}>
       <h2>BPO Adriene — Local Debug</h2>
-      <div style={{marginBottom:10}}>
-        <button onClick={startCall}>Start Mock Call</button>
-      </div>
-      <div style={{border:'1px solid #ddd', padding:10, height:300, overflow:'auto'}}>
-        {messages.map((m,i)=> (
-          <div key={i} style={{marginBottom:8}}>
-            <strong>{m.from}:</strong> {m.text}
-          </div>
-        ))}
-      </div>
-      <div style={{marginTop:10}}>
-        <input value={input} onChange={e=>setInput(e.target.value)} style={{width:'70%'}} />
-        <button onClick={sendUtterance}>Send</button>
-      </div>
-      <div style={{marginTop:20,fontSize:12,color:'#555'}}>
-        Tip: type short replies like "yes", "no", or an age like "67" to simulate caller responses.
+      <Dashboard onOpenCall={(c)=>setSelectedCall(c)} />
+      <CallDetail call={selectedCall} />
+
+      <div style={{marginTop:20}}>
+        <div style={{marginBottom:10}}>
+          <button onClick={startCall}>Start Mock Call</button>
+        </div>
+        <div style={{border:'1px solid #ddd', padding:10, height:200, overflow:'auto'}}>
+          {messages.map((m,i)=> (
+            <div key={i} style={{marginBottom:8}}>
+              <strong>{m.from}:</strong> {m.text}
+            </div>
+          ))}
+        </div>
+        <div style={{marginTop:10}}>
+          <input value={input} onChange={e=>setInput(e.target.value)} style={{width:'70%'}} />
+          <button onClick={sendUtterance}>Send</button>
+        </div>
+        <div style={{marginTop:20,fontSize:12,color:'#555'}}>
+          Tip: type short replies like "yes", "no", or an age like "67" to simulate caller responses.
+        </div>
       </div>
     </div>
   );

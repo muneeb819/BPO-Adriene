@@ -1,5 +1,6 @@
-# Added pytest to allow running unit tests for core logic
+# Backend Python dependencies
 fastapi==0.95.2
 uvicorn[standard]==0.22.0
 python-multipart==0.0.6
 pytest==7.4.0
+sqlmodel==0.0.8
