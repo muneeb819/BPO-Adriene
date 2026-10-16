@@ -1,0 +1,24 @@
+{
+  "scenario": "learn_loop",
+  "voice": "am_michael",
+  "speed": 1.0,
+  "recorded_at": "2026-10-16T20:26:24+00:00",
+  "turns": [
+    {
+      "role": "bot",
+      "text": "Hello! Adriene here, from the Senior Resource Center \u2014 quick call about Medicare options for folks in your area. Is now a good time?"
+    },
+    {
+      "role": "bot",
+      "text": "Got it. And do you have Medicare already?"
+    },
+    {
+      "role": "user",
+      "text": "zorp quack snarfing flibbertigibbet"
+    },
+    {
+      "role": "bot",
+      "text": "No problem at all, I'm glad you asked rather than guessed. Let me ask it more simply \u2014 are you signed up for Medicare yet?"
+    }
+  ]
+}

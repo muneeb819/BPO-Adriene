@@ -1,0 +1,28 @@
+{
+  "scenario": "spanish",
+  "voice": "am_michael",
+  "speed": "1",
+  "recorded_at": "2026-10-16T20:22:08+00:00",
+  "turns": [
+    {
+      "role": "bot",
+      "text": "Hi! This is Adriene with the Senior Resource Center \u2014 I'm calling about Medicare benefits in your area. Did I catch you at a good time?"
+    },
+    {
+      "role": "bot",
+      "text": "Great! So, do you currently have Medicare?"
+    },
+    {
+      "role": "user",
+      "text": "can we do this in Spanish please"
+    },
+    {
+      "role": "bot",
+      "text": "\u00a1Por supuesto! I'll connect you with a Spanish-speaking specialist right away \u2014 un momento, por favor. Before I bring them in: I'm an independent licensed agent \u2014 we're not affiliated with or endorsed by Medicare or the government."
+    },
+    {
+      "role": "event",
+      "text": "TRANSFER_TRIGGERED"
+    }
+  ]
+}

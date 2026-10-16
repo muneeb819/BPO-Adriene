@@ -1,0 +1,24 @@
+{
+  "scenario": "kb_part_a",
+  "voice": "am_michael",
+  "speed": "1",
+  "recorded_at": "2026-10-16T20:21:34+00:00",
+  "turns": [
+    {
+      "role": "bot",
+      "text": "Hi! This is Adriene with the Senior Resource Center \u2014 I'm calling about Medicare benefits in your area. Did I catch you at a good time?"
+    },
+    {
+      "role": "bot",
+      "text": "Understood. Just to be sure I've got this right \u2014 do you currently have Medicare?"
+    },
+    {
+      "role": "user",
+      "text": "wait, what does Medicare Part A actually cover?"
+    },
+    {
+      "role": "bot",
+      "text": "Happy to explain! Part A is hospital insurance \u2014 it covers inpatient hospital stays, skilled nursing after a hospital stay, hospice, and some home health. Most people don't pay a monthly premium for Part A. Got it. And do you have Medicare already?"
+    }
+  ]
+}

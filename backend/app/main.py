@@ -12,7 +12,10 @@ from .models import CallRecord, Transcript
 from .qa_endpoints import router as qa_router
 from sqlmodel import Session, select
 from datetime import datetime, timezone
+import json
 import uuid
+
+from fastapi import HTTPException
 
 app = FastAPI(title="BPO-Adriene AI Voice Bot (local-debug)")
 app.add_middleware(
@@ -297,6 +300,63 @@ FRONTEND_BUILD = Path(__file__).resolve().parents[2] / 'frontend' / 'build'
 def qa_reports_page():
     """Static QA Reports viewer (frontend/public/qa_reports.html)."""
     return FileResponse(FRONTEND_PUBLIC / 'qa_reports.html', media_type='text/html')
+
+
+# ---------------- Recordings: mock-call turns + QA scenario audio ----------------
+_QA_DIR = Path(__file__).resolve().parents[1] / 'qa_outputs'
+_REC_DIR = _QA_DIR / 'recordings'
+
+
+@app.get('/recordings.html')
+def recordings_page():
+    """Call-recording player (frontend/public/recordings.html)."""
+    return FileResponse(FRONTEND_PUBLIC / 'recordings.html', media_type='text/html')
+
+
+def _media_info(path: Path) -> dict:
+    info = {'name': path.name, 'bytes': path.stat().st_size,
+            'url': f'/media/{path.name}'}
+    if path.suffix.lower() == '.wav':
+        try:
+            import wave as _wave
+            with _wave.open(str(path), 'rb') as w:
+                info['duration'] = round(w.getnframes() / float(w.getframerate()), 1)
+        except Exception:
+            info['duration'] = None
+    return info
+
+
+@app.get('/api/recordings')
+async def list_recordings():
+    """Everything recorded so far: real mock-call turns + QA scenario audio."""
+    def _ls(d: Path):
+        if not d.is_dir():
+            return []
+        return [_media_info(p) for p in sorted(d.glob('*.wav'))]
+
+    transcripts = {}
+    if _REC_DIR.is_dir():
+        for p in sorted(_REC_DIR.glob('*_transcript.json')):
+            try:
+                transcripts[p.stem.replace('_transcript', '')] = json.loads(
+                    p.read_text(encoding='utf-8'))
+            except Exception:
+                pass
+    return {'mock_calls': _ls(_REC_DIR), 'qa_scenarios': _ls(_QA_DIR),
+            'transcripts': transcripts}
+
+
+@app.get('/media/{name}')
+async def media_file(name: str):
+    """Serve one recorded WAV/transcript — flat filenames only, no traversal."""
+    if Path(name).name != name:
+        raise HTTPException(status_code=404, detail='not found')
+    for d in (_REC_DIR, _QA_DIR):
+        p = d / name
+        if p.is_file():
+            media = 'audio/wav' if p.suffix.lower() == '.wav' else 'application/json'
+            return FileResponse(p, media_type=media)
+    raise HTTPException(status_code=404, detail='not found')
 
 
 if FRONTEND_BUILD.is_dir():
