@@ -1,40 +1,17 @@
-# =============================================================================
-#  BPO Adriene — AI Voice Fronter (Docker Compose)
-#
-#     cp .env.example .env      # then edit keys / ARI / WEB_PASSWORD
-#     docker compose up -d
-#     docker compose logs -f
-#     docker compose exec app python scripts/healthcheck.py
-#
-#  One container holds both processes (voice server :8880 + app :8000). Data —
-#  call log, recordings, campaigns, the voice library and the downloaded voice
-#  models — lives in ./data on the host, so `docker compose down` never loses a
-#  call recording.
-# =============================================================================
+version: '3.8'
+
 services:
-  app:
-    build:
-      context: .
-      args:
-        # 1 = bake the ~190 MB of neural voices into the image
-        FETCH_VOICES: "0"
-    image: bpo-adriene:latest
-    container_name: bpo-adriene
-    restart: unless-stopped
-    env_file:
-      - .env
-    environment:
-      HOST: 0.0.0.0
-      PORT: "8000"
-      PIPER_BASE_URL: http://127.0.0.1:8880
-      KOKORO_BASE_URL: http://127.0.0.1:8880
-      FETCH_VOICES: "1"
-      START_VOICE: "1"
+  backend:
+    build: ./backend
     ports:
       - "8000:8000"
     volumes:
-      - ./data:/app/data
-      - ./logs:/app/logs
-    # The app holds the Asterisk ARI websocket and the dashboard, so give it a
-    # moment to shut down cleanly (call recordings are flushed on stop).
-    stop_grace_period: 20s
+      - ./backend:/app
+  frontend:
+    build: ./frontend
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./frontend:/app
+    environment:
+      - CHOKIDAR_USEPOLLING=true
