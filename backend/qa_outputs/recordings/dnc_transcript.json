@@ -1,0 +1,24 @@
+{
+  "scenario": "dnc",
+  "voice": "am_michael",
+  "speed": "1",
+  "recorded_at": "2026-10-16T20:20:41+00:00",
+  "turns": [
+    {
+      "role": "bot",
+      "text": "Hi! This is Adriene with the Senior Resource Center \u2014 I'm calling about Medicare benefits in your area. Did I catch you at a good time?"
+    },
+    {
+      "role": "bot",
+      "text": "Great! So, do you currently have Medicare?"
+    },
+    {
+      "role": "user",
+      "text": "take me off your call list permanently"
+    },
+    {
+      "role": "bot",
+      "text": "Of course \u2014 I'm adding your number to our internal do-not-call list right now, and you won't hear from us again. I'm sorry for the interruption, and thank you for telling me. Have a great day."
+    }
+  ]
+}

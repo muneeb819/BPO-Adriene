@@ -64,6 +64,10 @@ logs/
 # QA runner outputs: reports/CSV are tracked, generated audio is not
 backend/qa_outputs/*.wav
 
+# live self-learning memory (runtime data, not source)
+backend/brain_memory.json
+backend/brain_memory.tmp
+
 # Local dev database
 dev.db
 

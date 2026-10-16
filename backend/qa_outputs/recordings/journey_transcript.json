@@ -1,0 +1,44 @@
+{
+  "scenario": "journey",
+  "voice": "am_michael",
+  "speed": "1",
+  "recorded_at": "2026-10-16T20:19:18+00:00",
+  "turns": [
+    {
+      "role": "bot",
+      "text": "Hi! This is Adriene with the Senior Resource Center \u2014 I'm calling about Medicare benefits in your area. Did I catch you at a good time?"
+    },
+    {
+      "role": "bot",
+      "text": "Got it. And do you have Medicare already?"
+    },
+    {
+      "role": "user",
+      "text": "yes, now is a fine time"
+    },
+    {
+      "role": "bot",
+      "text": "Great \u2014 that's what I figured. Are you between 45 and 80 years old?"
+    },
+    {
+      "role": "user",
+      "text": "yep, I've had part b for about six years"
+    },
+    {
+      "role": "bot",
+      "text": "Great question! Part B is medical insurance \u2014 doctor visits, outpatient care, preventive screenings, ambulances and durable medical equipment. It does have a monthly premium, and a yearly deductible. Are you between 45 and 80 years old? A quick yes, or your age, is perfect."
+    },
+    {
+      "role": "user",
+      "text": "I'm sixty seven years old"
+    },
+    {
+      "role": "bot",
+      "text": "That's wonderful \u2014 you look like a great fit. I'll transfer you to a Benefits Specialist right now, they're expecting you. One moment! Before I bring them in: I'm an independent licensed agent \u2014 we're not affiliated with or endorsed by Medicare or the government."
+    },
+    {
+      "role": "event",
+      "text": "TRANSFER_TRIGGERED"
+    }
+  ]
+}

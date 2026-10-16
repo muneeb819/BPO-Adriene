@@ -20,6 +20,7 @@ for deterministic scenario files and is suitable for local QA preview.
 import argparse
 import json
 import os
+import sys
 import time
 import random
 import csv
@@ -30,13 +31,27 @@ import glob
 
 try:
     import pyttsx3
+    import logging
+    logging.getLogger("pyttsx3").setLevel(logging.ERROR)   # silence "Pitch
+    # adjustment not supported when using SAPI5" chatter on every file
 except Exception:
     pyttsx3 = None
 
-BASE = Path(__file__).resolve().parents[1]
+BASE = Path(__file__).resolve().parents[1]          # backend/
 OUTPUT_DIR = BASE / 'qa_outputs'
 SCENARIO_DIR = BASE.parent / 'docs' / 'scenarios'
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+# Run against the REAL dialogue brain (core/state_machine + core/brain) so QA
+# exercises the same NLU/persona/compliance the live bot uses. Falls back to
+# the scripted replies below only if the app package can't be imported.
+if str(BASE) not in sys.path:
+    sys.path.insert(0, str(BASE))
+try:
+    from app.core.state_machine import CallSession   # noqa: E402
+except Exception as _e:                              # pragma: no cover
+    CallSession = None
+    print(f"[qa_runner] brain import failed ({_e}); using scripted fallback replies")
 
 # Per-file TTS budget; a stuck engine is abandoned instead of stalling the run.
 TTS_TIMEOUT = float(os.getenv('QA_TTS_TIMEOUT', '30'))
@@ -48,24 +63,67 @@ def _iso(ts: float = None) -> str:
     return dt.replace(tzinfo=None).isoformat() + 'Z'
 
 
+def _pick_voice(engine):
+    """Choose the warmest available SAPI voice (female/neural preferred)."""
+    voices = engine.getProperty('voices') or []
+    if not voices:
+        return None
+
+    def score(v):
+        n = ((v.name or '') + ' ' + str(getattr(v, 'id', ''))).lower()
+        s = 0
+        for good in ('zira', 'aria', 'jenny', 'ava', 'sonia', 'libby', 'emma',
+                     'samantha', 'female', 'natural', 'neural', 'google'):
+            if good in n:
+                s += 3
+        for bad in ('david', 'huskey', 'robot', 'compact', 'male desktop'):
+            if bad in n:
+                s -= 2
+        return s
+
+    return max(voices, key=score)
+
+
 def synth_tts(text: str, out_file: Path):
     """Synthesize `text` into `out_file`, returning the path on success else None.
 
-    A fresh engine is created per file: reusing a single pyttsx3 engine across
-    save_to_file()/runAndWait() calls can deadlock on Windows (SAPI). The work
-    also runs on a daemon thread with a timeout so a wedged engine can never
-    hang the whole scenario run.
+    Preferred engine is the local Kokoro-82M neural voice (Adriene's real voice
+    pack, chosen via QA_TTS_VOICE/TTS_VOICE); pyttsx3 remains the fallback when
+    kokoro isn't installed. Both run on a daemon thread with a timeout so a
+    wedged engine can never hang the whole scenario run. Voice/pace/pitch for
+    the pyttsx3 path are tuned for a young, energetic speaker.
     """
-    if pyttsx3 is None:
-        return None
+    def _kokoro() -> bool:
+        from app.core.adapters import kokoro_tts
+        if not kokoro_tts.available():
+            return False
+        voice = os.getenv("QA_TTS_VOICE") or os.getenv("TTS_VOICE") or kokoro_tts.DEFAULT_VOICE
+        try:
+            speed = float(os.getenv("QA_TTS_SPEED", "1.0"))
+        except ValueError:
+            speed = 1.0
+        wav = kokoro_tts.synthesize(text, voice=voice, speed=speed)
+        out_file.write_bytes(wav)
+        return True
 
-    def _speak():
-        engine = pyttsx3.init()
-        engine.save_to_file(text, str(out_file))
-        engine.runAndWait()
-        engine.stop()
+    def _run():
+        try:
+            if _kokoro():
+                return
+        except Exception as e:
+            print(f"[qa_runner] Kokoro TTS unavailable ({e}); falling back to pyttsx3")
+        if pyttsx3 is not None:
+            engine = pyttsx3.init()
+            voice = _pick_voice(engine)
+            if voice is not None:
+                engine.setProperty('voice', voice.id)
+            engine.setProperty('rate', 178)      # brisk but clear (default 200)
+            engine.setProperty('pitch', 58)      # slightly higher = younger/friendlier
+            engine.save_to_file(text, str(out_file))
+            engine.runAndWait()
+            engine.stop()
 
-    worker = threading.Thread(target=_speak, daemon=True)
+    worker = threading.Thread(target=_run, daemon=True)
     worker.start()
     worker.join(TTS_TIMEOUT)
     if worker.is_alive():
@@ -108,6 +166,18 @@ def run_scenario_dict(scenario: dict, output_dir: Path) -> dict:
     variables = scenario.get('variables', {})
     utterances = scenario.get('utterances', [])
 
+    # Real brain: one CallSession per scenario (greeting consumed up front,
+    # the scenario's first utterance answers it — same as the live WS flow).
+    session = None
+    if CallSession is not None:
+        session = CallSession(f"qa_{report['scenario_id']}")
+        session.get_next_bot_prompt()
+
+    def agent_reply(user_text: str) -> str:
+        if session is not None:
+            return session.process_user_utterance(user_text)[0]
+        return fake_llm_response(user_text, variables)
+
     base_time = time.time()
     turn_index = 0
     for utt in utterances:
@@ -135,7 +205,7 @@ def run_scenario_dict(scenario: dict, output_dir: Path) -> dict:
         # simulate TTFT
         llm_first_token = llm_start + random.uniform(0.05, 0.2)
         # generate response
-        agent_text = fake_llm_response(stt_text, variables)
+        agent_text = agent_reply(stt_text)
         llm_complete = llm_first_token + max(0.01, len(agent_text) * 0.002)
 
         # TTS

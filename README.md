@@ -1,57 +1,55 @@
-# BPO-Adriene — AI Voice Bot Scaffold
+# BPO Adriene — AI Voice Bot
 
-This branch provides a local-debug scaffold for the AI Voice Agent Bot MVP. It uses a Python FastAPI backend and a simple React frontend. Everything runs locally (no ViciDial integration) for development and testing.
+A local-first Medicare outreach voice agent. A dialogue brain that understands
+any reply, a natural neural voice, hands-free microphone conversation, and a
+self-learning memory — all running on your machine with zero cloud keys.
 
-Goals:
-- Run the call-flow state machine locally
-- Simulate STT by typing user responses in the frontend
-- Bot responses are spoken by the browser (SpeechSynthesis) and shown in the UI
-- Trigger a "transfer" action when eligibility is confirmed
+## What it does
 
-Run locally (requires Docker & Docker Compose) — or run backend and frontend separately.
+- **Dialogue brain** — script flow (greeting → Medicare → age → eligibility →
+  warm transfer) with real understanding: Medicare knowledge base answers,
+  objections, DNC (compliance-owned wording), complaints, callbacks, Spanish
+  handoff, repair ladder for confused callers, and a self-learning memory that
+  queues unknown phrasings you can teach later.
+- **Neural voice** — Kokoro-82M with 20 US-English voices (11F/9M, quality
+  graded in the Voice Panel), pace control, per-sentence chunking + prefetch,
+  and barge-in (talk over her — she stops and listens).
+- **Live microphone** — 🎤 push-to-talk with live transcript, or 🔄 hands-free
+  mode: the mic auto-arms after she finishes and mutes while she speaks
+  (half-duplex, so she never hears herself).
+- **Attach an LLM by adding one env key** (OpenAI / Anthropic / Gemini) — the
+  model re-words the brain's decisions; any failure falls back instantly.
+- **QA built in** — scenario runner with per-turn audio + reports, and a
+  `/recordings.html` player of every recorded call turn.
 
-With Docker (recommended):
-
-1. docker-compose up --build
-2. Open http://localhost:3000
-
-Or run locally without Docker:
-- Backend: cd backend && pip install -r requirements.txt && uvicorn app.main:app --reload --port 8000
-- Frontend: cd frontend && npm install && npm start
-
-Next steps (coming PRs / work):
-- Integrate streaming STT & TTS providers (Deepgram, Google, ElevenLabs)
-- Add SIP / Twilio or direct SIP handler for media bridging
-- Implement LLM prompt templates & safety/compliance checks
-- Implement recordings storage, analytics, and labeling UI
-
-## QA Runner
-
-Deterministic scenario runner for local QA (mock STT/LLM/TTS, no telephony):
+## Quick start
 
 ```bash
-# run every scenario under docs/scenarios/ and write a consolidated CSV
-python backend/scripts/qa_runner.py --all
+# Docker (recommended)
+cp .env.example .env && docker compose up -d --build
+open http://localhost:8055/
 
-# or a single scenario
-python backend/scripts/qa_runner.py --scenario docs/scenarios/cooperative_caller.json
+# — or bare metal —
+cd frontend && npm install && npm run build && cd ..
+cd backend && pip install -r requirements.txt
+set SECRET_KEY=dev-secret && set DATABASE_URL=sqlite:///./dev.db
+python -m uvicorn backend.app.main:app --port 8055
 ```
 
-Outputs land in `backend/qa_outputs/`:
+Windows: `.\start.ps1` · Linux/macOS: `./start.sh` · Tests: `./start.sh --tests`
 
-- `report_{scenario_id}.json` — per-turn transcript, latency metrics and pass/fail checks
-- `{scenario_id}_turn_{n}_agent.wav` — per-turn agent audio (requires `pyttsx3`, Windows)
-- `results_summary.csv` — one row per scenario when running `--all`
+## Layout
 
-With the backend and frontend running, browse them at http://localhost:3000/qa_reports.html
-or call the API directly:
+```
+backend/app/main.py        API + WebSocket call flow (serves the console too)
+backend/app/core/brain/    NLU · Medicare KB · persona · compliance · memory
+backend/app/core/          state_machine · orchestrator · adapters (kokoro_tts,
+                           llm, stt, tts, transfer, media, twilio)
+backend/scripts/           qa_runner (scenario QA + per-turn audio)
+backend/tests/             pytest suite (71 tests)
+frontend/src/App.js        console: call UI, voice panel, mic, hands-free
+Dockerfile · docker-compose.yml · .env.example · start.* launchers
+```
 
-- `GET /api/qa/reports` — list reports and artifacts
-- `GET /api/qa/report/{filename}` — a report JSON
-- `GET /api/qa/download/{filename}` — stream audio / CSV artifacts
-
-Scenario inputs live in `docs/scenarios/*.json` (see `docs/SCENARIO_TEMPLATES.md`).
-The frontend dev server proxies `/api` and `/ws` to `http://localhost:8000`; override with
-`PROXY_TARGET=http://localhost:<port> npm start` if the backend runs elsewhere.
-
-License: MIT
+See **[DEPLOYMENT.md](DEPLOYMENT.md)** for production deployment (Docker,
+systemd, env table, LLM attach, persistence, troubleshooting).

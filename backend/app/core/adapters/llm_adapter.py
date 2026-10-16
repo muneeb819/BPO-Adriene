@@ -1,38 +1,45 @@
-"""LLM adapter interface and a mock implementation.
+"""LLM adapter interface — Mock now delegates to the real brain.
 
-Mock returns short scripted responses for testing. Real providers (OpenAI) can be added later.
+The local "mock" is no longer canned text: ``MockLLM`` routes through
+``core.brain`` (NLU + Medicare knowledge + persona + compliance + memory), so
+every consumer of the LLM adapter gets the same intelligence as the live
+WebSocket call flow. Real providers (OpenAI/Anthropic/Gemini) are picked up
+automatically by ``Brain.generate`` when a key exists in the environment.
 """
 import os
 from typing import List
 
-LLM_PROVIDER = os.getenv("LLM_PROVIDER", "mock")
+from ..brain import get_brain
+
 
 class LLMAdapter:
     def generate(self, system_prompt: str, messages: List[dict]) -> str:
         raise NotImplementedError
 
+
 class MockLLM(LLMAdapter):
+    """Local brain — understands any reply, answers Medicare questions,
+    stays compliant, and learns (see core/brain/)."""
+
     def generate(self, system_prompt: str, messages: List[dict]) -> str:
-        # Very simple rule-based fallback for local testing
-        last_user = None
+        brain = get_brain()
+        last_user = ""
         for m in reversed(messages):
-            if m.get('role') == 'user':
-                last_user = m.get('content')
+            if m.get("role") == "user":
+                last_user = m.get("content") or ""
                 break
+        # optional upgrade: real model re-words the decision when a key exists
+        if brain.llm_available:
+            out = brain.generate(system_prompt, messages)
+            if out:
+                return out
         if not last_user:
-            return "Hello, I'm Adriene. May I ask if you have Medicare?"
-        u = last_user.lower()
-        if 'medicare' in u:
-            return "Thanks for confirming. Are you between 45 and 80 years old?"
-        if any(tok in u for tok in ['yes', 'y', 'yeah']):
-            return "Thank you. One moment while I transfer you."
-        if any(tok in u for tok in ['no', 'not']):
-            return "Understood. Thank you for your time."
-        # default
-        return "I didn't catch that. Could you please repeat?"
+            return brain.persona.greeting()
+        return brain.answer(last_user)
 
 
 def get_llm_adapter() -> LLMAdapter:
-    if LLM_PROVIDER == 'mock':
-        return MockLLM()
-    raise NotImplementedError(f"LLM provider {LLM_PROVIDER} not implemented")
+    # Provider is read at call time so runtime switching works. Every value
+    # (mock/openai/anthropic/gemini/unknown) maps to the local brain first —
+    # Brain.generate upgrades wording automatically when a key is present.
+    return MockLLM()

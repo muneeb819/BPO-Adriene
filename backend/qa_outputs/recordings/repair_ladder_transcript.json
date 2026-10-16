@@ -1,0 +1,44 @@
+{
+  "scenario": "repair_ladder",
+  "voice": "am_michael",
+  "speed": "1",
+  "recorded_at": "2026-10-16T20:22:30+00:00",
+  "turns": [
+    {
+      "role": "bot",
+      "text": "Hey, good to reach you! This is Adriene with the Senior Resource Center calling about Medicare. Got a minute for me?"
+    },
+    {
+      "role": "bot",
+      "text": "Understood. Just to be sure I've got this right \u2014 do you currently have Medicare?"
+    },
+    {
+      "role": "user",
+      "text": "blargh sniffle zzz"
+    },
+    {
+      "role": "bot",
+      "text": "Totally fair \u2014 I know this stuff can sound like alphabet soup. Let me explain it in plain English\u2026 Let me ask it more simply \u2014 are you signed up for Medicare yet?"
+    },
+    {
+      "role": "user",
+      "text": "huh?? grrblbl"
+    },
+    {
+      "role": "bot",
+      "text": "Tell you what \u2014 you can just say 'yes' or 'no', or give me your age as a number. Sorry if that was unclear! In plain words: is Medicare your coverage right now? Or if you'd rather, I can have a licensed specialist walk you through it."
+    },
+    {
+      "role": "user",
+      "text": "mmph qqqzzz"
+    },
+    {
+      "role": "bot",
+      "text": "Let me save you the trouble \u2014 I'll bring in a licensed specialist who can explain everything properly. Hang tight, I'll transfer you now. Before I bring them in: I'm an independent licensed agent \u2014 we're not affiliated with or endorsed by Medicare or the government."
+    },
+    {
+      "role": "event",
+      "text": "TRANSFER_TRIGGERED"
+    }
+  ]
+}

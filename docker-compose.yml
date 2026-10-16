@@ -1,17 +1,25 @@
-version: '3.8'
-
+# BPO Adriene — single-service deploy: API + WebSocket + console on :8055.
+# Variables come from ./.env (auto-loaded by compose) — see .env.example.
 services:
-  backend:
-    build: ./backend
+  bot:
+    build: .
+    image: bpo-adriene
     ports:
-      - "8000:8000"
-    volumes:
-      - ./backend:/app
-  frontend:
-    build: ./frontend
-    ports:
-      - "3000:3000"
-    volumes:
-      - ./frontend:/app
+      - "8055:8055"
     environment:
-      - CHOKIDAR_USEPOLLING=true
+      SECRET_KEY: ${SECRET_KEY:-change-me}
+      # attach an LLM by adding ONE of these to .env — no code change:
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-sonnet-4-5}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.0-flash}
+    volumes:
+      - hf-cache:/root/.cache/huggingface   # Kokoro model (~330 MB), reused
+      - bot-data:/app/data                  # call history + self-learning memory
+    restart: unless-stopped
+
+volumes:
+  hf-cache:
+  bot-data:

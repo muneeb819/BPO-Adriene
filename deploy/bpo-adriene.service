@@ -1,23 +1,21 @@
 # =============================================================================
-#  BPO Adriene app (dashboard + campaigns + ARI listener) — systemd unit
+#  BPO Adriene app — systemd unit (Linux server)
 #
-#  Install (Linux server):
+#  Install:
 #     sudo cp deploy/bpo-adriene.service /etc/systemd/system/
 #     sudo systemctl daemon-reload
-#     sudo systemctl enable --now bpo-voice bpo-adriene
+#     sudo systemctl enable --now bpo-adriene
 #     systemctl status bpo-adriene
 #     journalctl -u bpo-adriene -f
 #
-#  `cli.py serve` is production mode: it runs the ARI listener for Asterisk and
-#  the web app on PORT (see .env). Readiness: `python scripts/healthcheck.py`.
+#  Adjust WorkingDirectory/User and put your env (SECRET_KEY, optional LLM
+#  key) in /opt/bpo-adriene/.env. Readiness: GET /api/health.
 # =============================================================================
 [Unit]
-Description=BPO Adriene - AI voice fronter (ARI + web dashboard)
+Description=BPO Adriene - AI voice bot (FastAPI + Kokoro neural voice)
 Documentation=file:///opt/bpo-adriene/DEPLOYMENT.md
-After=network-online.target bpo-voice.service
+After=network-online.target
 Wants=network-online.target
-# Start/stop together with the voice server; keep the app running if it is down.
-Requires=bpo-voice.service
 
 [Service]
 Type=simple
@@ -25,8 +23,9 @@ User=bpo
 Group=bpo
 WorkingDirectory=/opt/bpo-adriene
 Environment=PYTHONUNBUFFERED=1
+Environment=HF_HUB_DISABLE_XET=1
 EnvironmentFile=-/opt/bpo-adriene/.env
-ExecStart=/opt/bpo-adriene/.venv/bin/python cli.py serve
+ExecStart=/opt/bpo-adriene/.venv/bin/python -m uvicorn backend.app.main:app --host 0.0.0.0 --port 8055
 Restart=always
 RestartSec=5
 TimeoutStopSec=20

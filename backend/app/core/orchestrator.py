@@ -17,6 +17,8 @@ from .adapters.transfer_adapter import get_transfer_adapter
 _runtime_config: Dict[str, str] = {
     'STT_PROVIDER': os.getenv('STT_PROVIDER', 'mock'),
     'TTS_PROVIDER': os.getenv('TTS_PROVIDER', 'mock'),
+    'TTS_VOICE': os.getenv('TTS_VOICE', 'af_heart'),
+    'TTS_SPEED': os.getenv('TTS_SPEED', '1.0'),
     'LLM_PROVIDER': os.getenv('LLM_PROVIDER', 'mock'),
     'MEDIA_BRIDGE': os.getenv('MEDIA_BRIDGE', 'mock'),
     'TRANSFER_PROVIDER': os.getenv('TRANSFER_PROVIDER', 'mock'),

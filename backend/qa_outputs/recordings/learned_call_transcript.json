@@ -1,0 +1,24 @@
+{
+  "scenario": "learned_call",
+  "voice": "am_michael",
+  "speed": 1.0,
+  "recorded_at": "2026-10-16T20:26:51+00:00",
+  "turns": [
+    {
+      "role": "bot",
+      "text": "Hey, good to reach you! This is Adriene with the Senior Resource Center calling about Medicare. Got a minute for me?"
+    },
+    {
+      "role": "bot",
+      "text": "Understood. Just to be sure I've got this right \u2014 do you currently have Medicare?"
+    },
+    {
+      "role": "user",
+      "text": "zorp quack snarfing flibbertigibbet"
+    },
+    {
+      "role": "bot",
+      "text": "Perfect, thanks for that. Are you between 45 and 80 years old?"
+    }
+  ]
+}
