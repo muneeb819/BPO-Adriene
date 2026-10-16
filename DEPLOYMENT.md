@@ -64,10 +64,17 @@ Highlights:
 | `TTS_VOICE` / `TTS_SPEED` | `af_heart` / `1.0` | 20 voices; change live in the Voice Panel |
 | `STT_PROVIDER` | `mock` | live STT is browser mic dictation (Web Speech API) |
 | `LLM_PROVIDER` | `mock` | `openai` · `anthropic` · `gemini` |
-| `TRANSFER_PROVIDER` | `mock` | `vici` · `twilio` (adapters need credentials) |
+| `TRANSFER_PROVIDER` | `mock` | `vici` · `twilio` (see credentials below) |
+| `TWILIO_ACCOUNT_SID` / `TWILIO_AUTH_TOKEN` / `TWILIO_FROM_NUMBER` / `TWILIO_AGENT_NUMBER` | — | real outbound agent handoff — plain HTTPS, no SDK |
+
+**`.env` is read automatically at startup** (root `.env` first, then
+`backend/.env`) — by the app itself, so it works for `start.*`, `uvicorn`,
+Docker and systemd alike. Real environment variables always win over the file.
 
 Runtime changes (voice, pace, providers) can be made live from the console's
-**Runtime Config** panel — no restart needed.
+**Runtime Config** panel — no restart needed. Note: panel changes are
+in-memory (they reset to the environment defaults on restart); for a setting
+to survive restarts, put it in `.env`.
 
 ## 4. Attaching an LLM
 
@@ -100,7 +107,8 @@ metal. Warm it ahead of traffic: `POST /api/tts/warm`.
 ```bash
 curl http://localhost:8055/api/health          # liveness (used by Docker HEALTHCHECK)
 curl http://localhost:8055/api/brain/status    # persona, memory counts, llm_ready
-cd backend && python -m pytest tests -q        # 71 tests
+python -m pytest backend/tests -q              # 71 tests — from the repo root
+#   (or: cd backend && python -m pytest tests -q)
 python backend/scripts/qa_runner.py --all      # scenario QA, writes backend/qa_outputs
 ```
 
@@ -120,7 +128,8 @@ reports at `/qa_reports.html`.
 - Back up the data dir: SQLite DB + `brain_memory.json` are the only state.
 - The Kokoro cache volume is safe to delete (re-downloads on next use).
 - Transfer adapters (ViciDial/Twilio) return `False` when unconfigured — the
-  call continues; wire credentials before going live with handoffs.
+  call continues; set `TRANSFER_PROVIDER=twilio` + `TWILIO_*` credentials in
+  `.env` before going live with handoffs.
 
 ## 9. Troubleshooting
 

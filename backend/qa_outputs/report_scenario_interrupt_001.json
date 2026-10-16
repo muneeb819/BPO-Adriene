@@ -1,32 +1,32 @@
 {
   "scenario_id": "scenario_interrupt_001",
   "name": "Interrupting Caller",
-  "started_at": "2026-10-16T22:08:00.186514Z",
+  "started_at": "2026-10-16T23:35:34.203492Z",
   "events": [
     {
       "turn": 0,
       "user": {
         "text": "Hello",
         "barge_in": false,
-        "start": "2026-10-16T22:08:00.193196Z",
-        "end": "2026-10-16T22:08:00.394150Z",
-        "stt_first_token": "2026-10-16T22:08:00.419580Z",
-        "stt_complete": "2026-10-16T22:08:00.453968Z"
+        "start": "2026-10-16T23:35:34.208493Z",
+        "end": "2026-10-16T23:35:34.409112Z",
+        "stt_first_token": "2026-10-16T23:35:34.465472Z",
+        "stt_complete": "2026-10-16T23:35:34.495274Z"
       },
       "agent": {
         "text": "I'm doing well, thanks! Right back at you. Great! So, do you currently have Medicare?",
-        "llm_first_token": "2026-10-16T22:08:00.577171Z",
-        "llm_complete": "2026-10-16T22:08:00.747171Z",
-        "tts_first_frame": "2026-10-16T22:08:00.784338Z",
-        "tts_end": "2026-10-16T22:08:02.484339Z",
+        "llm_first_token": "2026-10-16T23:35:34.650468Z",
+        "llm_complete": "2026-10-16T23:35:34.820468Z",
+        "tts_first_frame": "2026-10-16T23:35:34.852078Z",
+        "tts_end": "2026-10-16T23:35:36.552078Z",
         "tts_audio": "C:\\Users\\Wave\\Downloads\\BPO-Adriene\\backend\\qa_outputs\\scenario_interrupt_001_turn_0_agent.wav"
       },
       "metrics": {
-        "stt_latency": 0.025,
-        "ttft": 0.183,
-        "tts_latency": 0.037,
-        "end_to_first_audio": 0.39,
-        "total_turn_time": 2.291
+        "stt_latency": 0.056,
+        "ttft": 0.241,
+        "tts_latency": 0.032,
+        "end_to_first_audio": 0.443,
+        "total_turn_time": 2.344
       }
     },
     {
@@ -34,25 +34,25 @@
       "user": {
         "text": "Wait, I have a question",
         "barge_in": true,
-        "start": "2026-10-16T22:08:09.250528Z",
-        "end": "2026-10-16T22:08:09.941638Z",
-        "stt_first_token": "2026-10-16T22:08:09.987276Z",
-        "stt_complete": "2026-10-16T22:08:10.016849Z"
+        "start": "2026-10-16T23:35:45.283583Z",
+        "end": "2026-10-16T23:35:45.974440Z",
+        "stt_first_token": "2026-10-16T23:35:46.041530Z",
+        "stt_complete": "2026-10-16T23:35:46.075971Z"
       },
       "agent": {
         "text": "Of course \u2014 I'm all ears. What would you like to know?",
-        "llm_first_token": "2026-10-16T22:08:10.191667Z",
-        "llm_complete": "2026-10-16T22:08:10.299667Z",
-        "tts_first_frame": "2026-10-16T22:08:10.330838Z",
-        "tts_end": "2026-10-16T22:08:11.410838Z",
+        "llm_first_token": "2026-10-16T23:35:46.275263Z",
+        "llm_complete": "2026-10-16T23:35:46.383263Z",
+        "tts_first_frame": "2026-10-16T23:35:46.423980Z",
+        "tts_end": "2026-10-16T23:35:47.503980Z",
         "tts_audio": "C:\\Users\\Wave\\Downloads\\BPO-Adriene\\backend\\qa_outputs\\scenario_interrupt_001_turn_1_agent.wav"
       },
       "metrics": {
-        "stt_latency": 0.046,
-        "ttft": 0.25,
-        "tts_latency": 0.031,
-        "end_to_first_audio": 0.389,
-        "total_turn_time": 2.16
+        "stt_latency": 0.067,
+        "ttft": 0.301,
+        "tts_latency": 0.041,
+        "end_to_first_audio": 0.45,
+        "total_turn_time": 2.22
       }
     },
     {
@@ -60,25 +60,25 @@
       "user": {
         "text": "I'm 65",
         "barge_in": false,
-        "start": "2026-10-16T22:08:15.837225Z",
-        "end": "2026-10-16T22:08:16.038610Z",
-        "stt_first_token": "2026-10-16T22:08:16.066886Z",
-        "stt_complete": "2026-10-16T22:08:16.087893Z"
+        "start": "2026-10-16T23:35:52.122567Z",
+        "end": "2026-10-16T23:35:52.323602Z",
+        "stt_first_token": "2026-10-16T23:35:52.352032Z",
+        "stt_complete": "2026-10-16T23:35:52.400009Z"
       },
       "agent": {
         "text": "Thanks \u2014 65, got it. Perfect \u2014 quick check, are you on Medicare right now?",
-        "llm_first_token": "2026-10-16T22:08:16.203499Z",
-        "llm_complete": "2026-10-16T22:08:16.351499Z",
-        "tts_first_frame": "2026-10-16T22:08:16.397467Z",
-        "tts_end": "2026-10-16T22:08:17.877467Z",
+        "llm_first_token": "2026-10-16T23:35:52.603462Z",
+        "llm_complete": "2026-10-16T23:35:52.751462Z",
+        "tts_first_frame": "2026-10-16T23:35:52.806430Z",
+        "tts_end": "2026-10-16T23:35:54.286430Z",
         "tts_audio": "C:\\Users\\Wave\\Downloads\\BPO-Adriene\\backend\\qa_outputs\\scenario_interrupt_001_turn_2_agent.wav"
       },
       "metrics": {
         "stt_latency": 0.028,
-        "ttft": 0.165,
-        "tts_latency": 0.046,
-        "end_to_first_audio": 0.359,
-        "total_turn_time": 2.04
+        "ttft": 0.28,
+        "tts_latency": 0.055,
+        "end_to_first_audio": 0.483,
+        "total_turn_time": 2.164
       }
     }
   ],
@@ -89,7 +89,7 @@
     "age_extraction": 65,
     "barge_in_handled": true
   },
-  "completed_at": "2026-10-16T22:08:23.883477Z",
+  "completed_at": "2026-10-16T23:36:00.693033Z",
   "checks": [
     {
       "assertion": "must_contain:Medicare",

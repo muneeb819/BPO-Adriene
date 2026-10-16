@@ -1,5 +1,14 @@
 """Test isolation: every test gets a private brain memory (no cross-talk with
 the live brain_memory.json, and no pollution between tests)."""
+import sys
+from pathlib import Path
+
+# allow pytest from the repo root OR from backend/ — the `app` package lives
+# in backend/, and a root run can't find it without this.
+_backend = str(Path(__file__).resolve().parents[1])
+if _backend not in sys.path:
+    sys.path.insert(0, _backend)
+
 import pytest
 
 from app.core.brain import memory as memory_mod
