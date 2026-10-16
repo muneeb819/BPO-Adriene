@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="utf-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="675" viewBox="0 0 1200 675">
+  <style>
+    .bg { fill: #0b1020 }
+    .title { fill:#ffffff; font-family: Inter, Arial, sans-serif; font-size:30px; font-weight:700 }
+    .subtitle { fill:#9fb3d9; font-family: Inter, Arial, sans-serif; font-size:16px }
+    .box { fill:#0f1724; stroke:#1f2a44; stroke-width:1 } 
+    .h1 { fill:#e6eef8; font-family: Inter, Arial, sans-serif; font-size:20px; font-weight:600 }
+    .p { fill:#cfe3ff; font-family: Inter, Arial, sans-serif; font-size:14px }
+    .small { fill:#9fb3d9; font-family: Inter, Arial, sans-serif; font-size:12px }
+    .accent { fill:#7fd1ff }
+  </style>
+  <rect class="bg" width="1200" height="675" rx="0"/>
+
+  <text x="40" y="60" class="title">AI Voice Bot Management & Testing Playground</text>
+  <text x="40" y="90" class="subtitle">BPO‑Adriene — local-first, mock-safe environment for agent creation, testing, and QA</text>
+
+  <!-- Left column: What it is -->
+  <g transform="translate(40,120)">
+    <rect class="box" x="0" y="0" width="520" height="200" rx="8" />
+    <text x="16" y="32" class="h1">What it is</text>
+    <text x="16" y="60" class="p">• Local-first sandbox for voice agents (no live PSTN by default)</text>
+    <text x="16" y="84" class="p">• Simulated STT → LLM → TTS pipelines</text>
+    <text x="16" y="108" class="p">• Scenario-based QA runner (JSON scenarios → reports + audio)</text>
+    <text x="16" y="132" class="p">• Persistent configs: agents, prompts, versions</text>
+    <text x="16" y="156" class="p">• QA Reports UI: play per-turn audio, view JSON, download CSV</text>
+  </g>
+
+  <!-- Right column: Core flow -->
+  <g transform="translate(600,120)">
+    <rect class="box" x="0" y="0" width="560" height="320" rx="8" />
+    <text x="16" y="32" class="h1">Core Flow</text>
+
+    <g transform="translate(16,56)">
+      <rect x="0" y="0" width="520" height="48" rx="6" fill="#061229" stroke="#234e86" />
+      <text x="12" y="30" class="p">1. Configure Agent & Prompt (Agent Management)</text>
+    </g>
+
+    <g transform="translate(16,116)">
+      <rect x="0" y="0" width="520" height="48" rx="6" fill="#061229" stroke="#234e86" />
+      <text x="12" y="30" class="p">2. Start Mock Call / Run Scenario (Mic or scripted)</text>
+    </g>
+
+    <g transform="translate(16,176)">
+      <rect x="0" y="0" width="520" height="48" rx="6" fill="#061229" stroke="#234e86" />
+      <text x="12" y="30" class="p">3. Pipeline: STT → LLM → TTS (mock or provider)</text>
+    </g>
+
+    <g transform="translate(16,236)">
+      <rect x="0" y="0" width="520" height="48" rx="6" fill="#061229" stroke="#234e86" />
+      <text x="12" y="30" class="p">4. Collect timestamps, persist transcript & metrics</text>
+    </g>
+
+  </g>
+
+  <!-- Bottom: Features and safety -->
+  <g transform="translate(40,340)">
+    <rect class="box" x="0" y="0" width="1120" height="290" rx="8" />
+    <text x="16" y="34" class="h1">Key Features & Safety</text>
+    <text x="16" y="64" class="p">• Agent & prompt versioning | Templates | Knowledge-base (RAG-ready)</text>
+    <text x="16" y="92" class="p">• Live playground: mic controls, visualizers, barge-in detection</text>
+    <text x="16" y="120" class="p">• QA runner: deterministic scenarios, per-turn audio, JSON report, CSV summary</text>
+    <text x="16" y="148" class="p">• QA Reports UI: inline audio players, JSON viewer, CSV download</text>
+    <text x="16" y="176" class="p">• Secure defaults: mock-first, encrypted provider keys, opt-in real integrations</text>
+    <text x="16" y="204" class="small">Demo: run `python backend/scripts/qa_runner.py --all` then open /qa_reports.html</text>
+    <text x="16" y="228" class="small">Repo: https://github.com/muneeb819/BPO-Adriene (branch: feature/ai-voice-bot-scaffold)</text>
+  </g>
+
+  <text x="40" y="650" class="small">Prepared for: Project Owner — concise single-slide overview (exportable as PNG/PDF)</text>
+</svg>
