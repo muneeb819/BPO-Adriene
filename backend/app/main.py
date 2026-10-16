@@ -2,8 +2,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Depends
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from .core.state_machine import CallSession
-from .core.adapters.stt_adapter import get_stt_adapter
-from .core.adapters.media_bridge import get_media_bridge
+from .core.orchestrator import get_stt, get_media, get_llm, get_tts, get_transfer, get_runtime_config, set_runtime_config
 from .db import init_db, get_session
 from .models import CallRecord, Transcript
 from sqlmodel import Session, select
@@ -21,11 +20,32 @@ app.add_middleware(
 # Initialize DB
 init_db()
 
-stt = get_stt_adapter()
-media = get_media_bridge()
+# Runtime-configured adapters (local-first)
+stt = get_stt()
+media = get_media()
+llm = get_llm()
+tts = get_tts()
+transfer_adapter = get_transfer()
 
 # In-memory sessions (for prototype only)
 sessions = {}
+
+@app.post("/api/config")
+async def update_config(payload: dict):
+    # allow setting STT_PROVIDER, TTS_PROVIDER, LLM_PROVIDER, MEDIA_BRIDGE, TRANSFER_PROVIDER
+    set_runtime_config(payload)
+    # refresh adapters
+    global stt, media, llm, tts, transfer_adapter
+    stt = get_stt()
+    media = get_media()
+    llm = get_llm()
+    tts = get_tts()
+    transfer_adapter = get_transfer()
+    return JSONResponse({"status": "ok", "config": get_runtime_config()})
+
+@app.get('/api/config')
+async def get_config():
+    return get_runtime_config()
 
 @app.post("/api/call/start")
 async def start_call(session: Session = Depends(get_session)):
@@ -46,15 +66,19 @@ async def start_call(session: Session = Depends(get_session)):
 
 @app.post("/api/call/transfer")
 async def transfer_call(session_id: str, db: Session = Depends(get_session)):
-    # Placeholder: In production this triggers ViciDial API / SIP transfer
     db_rec = db.exec(select(CallRecord).where(CallRecord.session_id == session_id)).first()
     if not db_rec:
         return JSONResponse({"error": "session not found"}, status_code=404)
-    db_rec.state = "transferred"
-    db_rec.updated_at = __import__('datetime').datetime.utcnow()
-    db.add(db_rec)
-    db.commit()
-    return JSONResponse({"status": "transferring", "session_id": session_id})
+    # call transfer adapter
+    ok = transfer_adapter.transfer_call(session_id, target=None)
+    if ok:
+        db_rec.state = "transferred"
+        db_rec.updated_at = __import__('datetime').datetime.utcnow()
+        db.add(db_rec)
+        db.commit()
+        return JSONResponse({"status": "transferring", "session_id": session_id})
+    else:
+        return JSONResponse({"error": "transfer failed"}, status_code=500)
 
 @app.get("/api/calls")
 def list_calls(db: Session = Depends(get_session)):
@@ -113,7 +137,8 @@ async def websocket_call(websocket: WebSocket, session_id: str):
                         db_rec.updated_at = __import__('datetime').datetime.utcnow()
                         dbconn.add(db_rec)
                         dbconn.commit()
-                        # trigger transfer event (noop for mock)
+                        # trigger transfer event via adapter
+                        transfer_adapter.transfer_call(session_id)
                         media.stop_call(session_id)
                         await websocket.send_json({"type": "transfer", "message": "transfer_triggered"})
                         await websocket.close()

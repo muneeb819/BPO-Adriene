@@ -1,5 +1,45 @@
 import React, {useState, useEffect, useRef} from 'react';
 
+function ConfigPanel(){
+  const [cfg, setCfg] = useState(null);
+  useEffect(()=>{
+    fetch('/api/config').then(r=>r.json()).then(setCfg)
+  },[])
+  function update(){
+    fetch('/api/config', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(cfg)}).then(r=>r.json()).then(j=>alert('Config updated'))
+  }
+  if(!cfg) return null;
+  return (
+    <div style={{marginBottom:20}}>
+      <h3>Runtime Config</h3>
+      <div>
+        <label>STT Provider: </label>
+        <select value={cfg.STT_PROVIDER} onChange={e=>setCfg({...cfg, STT_PROVIDER: e.target.value})}>
+          <option value="mock">mock</option>
+          <option value="deepgram">deepgram</option>
+        </select>
+      </div>
+      <div>
+        <label>TTS Provider: </label>
+        <select value={cfg.TTS_PROVIDER} onChange={e=>setCfg({...cfg, TTS_PROVIDER: e.target.value})}>
+          <option value="mock">mock</option>
+          <option value="elevenlabs">elevenlabs</option>
+        </select>
+      </div>
+      <div>
+        <label>LLM Provider: </label>
+        <select value={cfg.LLM_PROVIDER} onChange={e=>setCfg({...cfg, LLM_PROVIDER: e.target.value})}>
+          <option value="mock">mock</option>
+          <option value="openai">openai</option>
+        </select>
+      </div>
+      <div style={{marginTop:8}}>
+        <button onClick={update}>Save Config</button>
+      </div>
+    </div>
+  )
+}
+
 function Dashboard({onOpenCall}){
   const [calls, setCalls] = useState([]);
   useEffect(()=>{
@@ -92,6 +132,7 @@ export default function App(){
   return (
     <div style={{padding:20,fontFamily:'Arial'}}>
       <h2>BPO Adriene — Local Debug</h2>
+      <ConfigPanel />
       <Dashboard onOpenCall={(c)=>setSelectedCall(c)} />
       <CallDetail call={selectedCall} />
 
