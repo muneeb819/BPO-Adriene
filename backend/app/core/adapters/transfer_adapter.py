@@ -21,15 +21,51 @@ class MockTransferAdapter(TransferAdapter):
 class ViciDialTransferAdapter(TransferAdapter):
     def __init__(self):
         # Placeholder: initialize API client or SIP connection here
-        pass
+        # Expect ViciDial credentials to be stored under provider='vici' in ProviderCredential
+        from app.db import fetch_credential
+        from app.core.crypto import decrypt_text
+        cred = fetch_credential('vici')
+        if cred:
+            try:
+                self.api_key = decrypt_text(cred.api_key_encrypted)
+                self.enabled = True
+            except Exception:
+                self.enabled = False
+        else:
+            self.enabled = False
     def transfer_call(self, session_id: str, target: str = None) -> bool:
         # Real implementation would call ViciDial API or instruct SIP server to warm transfer
-        raise NotImplementedError("ViciDial transfer adapter not implemented yet")
+        # For now raise NotImplementedError to indicate adapter needs configuration
+        if not getattr(self, 'enabled', False):
+            raise RuntimeError('ViciDial adapter not configured')
+        raise NotImplementedError('ViciDial transfer adapter not implemented')
+
+class TwilioSipTransferAdapter(TransferAdapter):
+    def __init__(self):
+        from app.db import fetch_credential
+        from app.core.crypto import decrypt_text
+        cred = fetch_credential('twilio')
+        if cred:
+            try:
+                self.api_key = decrypt_text(cred.api_key_encrypted)
+                self.enabled = True
+            except Exception:
+                self.enabled = False
+        else:
+            self.enabled = False
+    def transfer_call(self, session_id: str, target: str = None) -> bool:
+        # Real implementation would instruct Twilio or SIP to perform warm transfer
+        if not getattr(self, 'enabled', False):
+            raise RuntimeError('Twilio adapter not configured')
+        raise NotImplementedError('Twilio SIP transfer adapter not implemented')
 
 
 def get_transfer_adapter() -> TransferAdapter:
-    if TRANSFER_PROVIDER == 'mock':
+    provider = os.getenv('TRANSFER_PROVIDER', TRANSFER_PROVIDER)
+    if provider == 'mock':
         return MockTransferAdapter()
-    if TRANSFER_PROVIDER == 'vici':
+    if provider == 'vici':
         return ViciDialTransferAdapter()
-    raise NotImplementedError(f"Transfer provider {TRANSFER_PROVIDER} not implemented")
+    if provider == 'twilio':
+        return TwilioSipTransferAdapter()
+    raise NotImplementedError(f"Transfer provider {provider} not implemented")

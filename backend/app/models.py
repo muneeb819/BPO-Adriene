@@ -22,3 +22,12 @@ class ProviderCredential(SQLModel, table=True):
     api_key_encrypted: str
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+class TransferRecord(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    call_id: Optional[int] = Field(default=None, foreign_key="callrecord.id")
+    session_id: str
+    target: Optional[str] = None
+    status: str = "requested"
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
