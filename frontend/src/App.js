@@ -1,11 +1,78 @@
 import React, {useState, useEffect, useRef} from 'react';
 
 /* ------------------------------------------------------------------ *
- *  Voice engine — makes speechSynthesis sound like a real person:
- *  best available voice, sentence-by-sentence pacing (breath between
- *  sentences), warm/young pitch, empathetic slowdown, no stale queues.
+ *  Voice engine — makes speech sound like a real person.
+ *
+ *  Two engines:
+ *   • "neural" — local Kokoro-82M on the backend (20 US-English voices
+ *     with model-card grades). Replies are fetched per sentence and
+ *     pipelined: chunk N plays while chunk N+1 is being synthesized.
+ *   • "browser" — speechSynthesis fallback (auto-used if the neural
+ *     model isn't installed or a fetch fails mid-sentence).
  * ------------------------------------------------------------------ */
 let speakToken = 0;
+let neuralToken = 0;
+let neuralAudio = null;      // currently playing <audio> (neural engine)
+let neuralReady = false;     // flipped true once /api/tts/voices says installed
+let neuralVoices = [];       // Kokoro voice registry (name, gender, grade…)
+
+function splitSentences(text){
+  return (text.match(/[^.!?…]+[.!?…]*/g) || [text]).map(s => s.trim()).filter(Boolean);
+}
+
+function stopNeural(){
+  neuralToken++;                       // invalidate in-flight fetches/plays
+  if(neuralAudio){ try{ neuralAudio.pause(); }catch(e){} neuralAudio = null; }
+}
+
+function fetchChunk(text, voice, speed){
+  return fetch('/api/tts', {
+    method: 'POST', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({text, voice, speed}),
+  })
+    .then(r => r.ok ? r.blob() : Promise.reject(r.status))
+    .then(b => URL.createObjectURL(b))
+    .catch(() => null);
+}
+
+function playWav(url, token){
+  return new Promise(resolve => {
+    const a = new Audio(url);
+    neuralAudio = a;
+    const done = (ok) => { URL.revokeObjectURL(url); resolve(ok); };
+    a.onended = () => done(token === neuralToken);
+    a.onerror = () => done(false);
+    a.play().then(() => {}, () => done(false));   // autoplay rejection
+  });
+}
+
+async function speakNeural(text){
+  const token = ++neuralToken;
+  const voice = localStorage.getItem('adriene_kvoice') || 'af_heart';
+  const speed = parseFloat(localStorage.getItem('adriene_kspeed') || '1.0');
+  const segs = splitSentences(text);
+  // bundle very short fragments so one-word lines still sound natural
+  const chunks = [];
+  segs.forEach(s => {
+    if(s.split(/\s+/).length < 4 && chunks.length) chunks[chunks.length-1] += ' ' + s;
+    else chunks.push(s);
+  });
+  let pending = fetchChunk(chunks[0], voice, speed);   // prefetch first now…
+  for(let i = 0; i < chunks.length; i++){
+    const wavP = pending;
+    pending = (i + 1 < chunks.length)
+      ? fetchChunk(chunks[i+1], voice, speed)          // …synthesize next while playing
+      : null;
+    const wav = await wavP;
+    if(token !== neuralToken){ return; }               // superseded — drop quietly
+    if(!wav){                                          // neural hiccup → finish in browser voice
+      speakBrowser(chunks.slice(i).join(' '), window.__browserVoices || []);
+      return;
+    }
+    const ok = await playWav(wav, token);
+    if(!ok){ return; }
+  }
+}
 
 function scoreVoice(v){
   const n = ((v.name||'') + ' ' + (v.lang||'')).toLowerCase();
@@ -25,7 +92,7 @@ function pickVoice(voices, saved){
   return [...voices].sort((a,b) => scoreVoice(b) - scoreVoice(a))[0];
 }
 
-function speak(text, voices){
+function speakBrowser(text, voices){
   if(!window.speechSynthesis || !text) return;
   const synth = window.speechSynthesis;
   const token = ++speakToken;
@@ -34,7 +101,7 @@ function speak(text, voices){
   const voice = pickVoice(voices, saved);
   const baseRate = parseFloat(localStorage.getItem('adriene_rate') || '1.03');
   const empathetic = /understand|sorry|fair|apolog|no rush|completely|appreciate/i.test(text);
-  const segments = (text.match(/[^.!?…]+[.!?…]*/g) || [text]).map(s => s.trim()).filter(Boolean);
+  const segments = splitSentences(text);
   segments.forEach((seg, i) => {
     setTimeout(() => {
       if(token !== speakToken) return;              // superseded by a newer line
@@ -51,44 +118,138 @@ function speak(text, voices){
   });
 }
 
+/* Engine-aware entry point: neural (Kokoro) when selected & ready,
+ * browser speechSynthesis otherwise. */
+function speak(text, voices){
+  if(!text) return;
+  stopNeural();                                     // cut any neural audio in flight
+  speakToken++;                                     // and any queued browser lines
+  if(window.speechSynthesis) window.speechSynthesis.cancel();
+  const eng = localStorage.getItem('adriene_engine') || 'auto';
+  if((eng === 'neural' || eng === 'auto') && neuralReady){
+    speakNeural(text);
+    return;
+  }
+  speakBrowser(text, voices);
+}
+
 function VoicePanel(){
-  const [voices, setVoices] = useState([]);
-  const [sel, setSel] = useState(localStorage.getItem('adriene_voice') || '');
-  const [rate, setRate] = useState(parseFloat(localStorage.getItem('adriene_rate') || '1.03'));
+  const [bVoices, setBVoices] = useState([]);
+  const [engine, setEngine] = useState(localStorage.getItem('adriene_engine') || 'auto');
+  const [kVoices, setKVoices] = useState([]);
+  const [status, setStatus] = useState(null);        // /api/tts/voices snapshot
+  const [kSel, setKSel] = useState(localStorage.getItem('adriene_kvoice') || 'af_heart');
+  const [kSpeed, setKSpeed] = useState(parseFloat(localStorage.getItem('adriene_kspeed') || '1.0'));
+  const [bSel, setBSel] = useState(localStorage.getItem('adriene_voice') || '');
+  const [bRate, setBRate] = useState(parseFloat(localStorage.getItem('adriene_rate') || '1.03'));
 
   useEffect(()=>{
-    const load = () => { const v = window.speechSynthesis ? window.speechSynthesis.getVoices() : []; setVoices(v); };
+    const load = () => { const v = window.speechSynthesis ? window.speechSynthesis.getVoices() : []; setBVoices(v); window.__browserVoices = v; };
     load();
     if(window.speechSynthesis) window.speechSynthesis.onvoiceschanged = load;
+    fetch('/api/tts/voices').then(r=>r.ok?r.json():null).then(j=>{
+      if(!j) return;
+      setStatus(j); setKVoices(j.voices || []);
+      neuralVoices = j.voices || [];
+      neuralReady = !!j.installed;
+      if(j.installed && !j.warmed) fetch('/api/tts/warm', {method:'POST'}).catch(()=>{});
+    }).catch(()=>{});
     return () => { if(window.speechSynthesis) window.speechSynthesis.onvoiceschanged = null; };
   },[]);
 
-  function changeVoice(name){
-    setSel(name); localStorage.setItem('adriene_voice', name);
-    speak('Hi, this is Adriene — is this voice warm enough for you?', voices);
+  function changeEngine(e){
+    const eng = e.target.value;
+    setEngine(eng); localStorage.setItem('adriene_engine', eng);
+    previewNow(eng);
   }
-  function changeRate(r){
-    setRate(r); localStorage.setItem('adriene_rate', String(r));
+  function changeKVoice(name){
+    setKSel(name); localStorage.setItem('adriene_kvoice', name);
+    previewNow(engine);
+  }
+  function changeKSpeed(s){
+    setKSpeed(s); localStorage.setItem('adriene_kspeed', String(s));
+    fetch('/api/config', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({TTS_VOICE: kSel, TTS_SPEED: String(s)})}).catch(()=>{});
+  }
+  function changeBVoice(name){
+    setBSel(name); localStorage.setItem('adriene_voice', name);
+    speakBrowser('Hi, this is Adriene — is this voice warm enough for you?', bVoices);
+  }
+  function changeBRate(r){
+    setBRate(r); localStorage.setItem('adriene_rate', String(r));
+  }
+  function previewNow(eng){
+    const text = 'Hey! Adriene here — ready when you are.';
+    const want = eng || activeEngine;
+    stopNeural(); speakToken++; if(window.speechSynthesis) window.speechSynthesis.cancel();
+    if(want === 'neural' && neuralReady){
+      const token = neuralToken;   // stopNeural() just bumped it — play under that id
+      fetchChunk(text, kSel, kSpeed).then(u => { if(u) playWav(u, token); });
+    } else {
+      speakBrowser(text, bVoices);
+    }
   }
 
-  const ordered = [...voices].sort((a,b)=>scoreVoice(b)-scoreVoice(a));
-  const active = sel || (pickVoice(voices, '') ? pickVoice(voices, '').name : '');
+  const activeEngine = engine === 'auto' ? (neuralReady ? 'neural' : 'browser') : engine;
+  const useNeural = activeEngine === 'neural' && neuralReady;
+  const females = kVoices.filter(v=>v.gender==='f');
+  const males   = kVoices.filter(v=>v.gender==='m');
+  const opt = v => (
+    <option key={v.name} value={v.name}>
+      {v.name} · {v.traits} {v.grade} — {v.blurb}
+    </option>
+  );
+
   return (
     <div style={{marginBottom:20, border:'1px solid #e6e6f0', borderRadius:10, padding:12, background:'#fbfbff'}}>
       <h3 style={{marginTop:0}}>🔊 Adriene's Voice</h3>
+
       <div>
-        <label>Voice: </label>
-        <select value={active} onChange={e=>changeVoice(e.target.value)}>
-          {ordered.length === 0 && <option value="">(browser voices loading…)</option>}
-          {ordered.map(v => <option key={v.name} value={v.name}>{v.name} — {v.lang}</option>)}
+        <label>Engine: </label>
+        <select value={neuralReady ? activeEngine : 'browser'} onChange={changeEngine} disabled={!neuralReady}>
+          <option value="neural">Adriene Neural — Kokoro-82M (20 US voices, local)</option>
+          <option value="browser">Browser voices (offline fallback)</option>
         </select>
-        <button style={{marginLeft:8}} onClick={()=>speak('Hey! Adriene here — ready when you are.', voices)}>Preview</button>
+        {status && !status.installed &&
+          <span style={{marginLeft:8, fontSize:12, color:'#a66'}}>neural unavailable — install kokoro</span>}
+        {status && status.installed && !status.warmed &&
+          <span style={{marginLeft:8, fontSize:12, color:'#888', fontStyle:'italic'}}>warming model… (first reply may pause briefly)</span>}
       </div>
+
+      {useNeural ? (
+        <div style={{marginTop:8}}>
+          <label>Voice: </label>
+          <select value={kSel} onChange={e=>changeKVoice(e.target.value)}>
+            <optgroup label="🚺 Female">{females.map(opt)}</optgroup>
+            <optgroup label="🚹 Male">{males.map(opt)}</optgroup>
+          </select>
+          <button style={{marginLeft:8}} onClick={()=>previewNow()}>Preview</button>
+        </div>
+      ) : (
+        <div style={{marginTop:8}}>
+          <label>Voice: </label>
+          <select value={bSel || (pickVoice(bVoices,'')||{}).name || ''} onChange={e=>changeBVoice(e.target.value)}>
+            {bVoices.length === 0 && <option value="">(browser voices loading…)</option>}
+            {[...bVoices].sort((a,b)=>scoreVoice(b)-scoreVoice(a)).map(v =>
+              <option key={v.name} value={v.name}>{v.name} — {v.lang}</option>)}
+          </select>
+          <button style={{marginLeft:8}} onClick={()=>previewNow()}>Preview</button>
+        </div>
+      )}
+
       <div style={{marginTop:8}}>
-        <label>Pace: </label>
-        <input type="range" min="0.8" max="1.3" step="0.01" value={rate}
-               onChange={e=>changeRate(parseFloat(e.target.value))} />
-        <span style={{marginLeft:6, fontSize:12, color:'#555'}}>{rate.toFixed(2)}×</span>
+        <label>{useNeural ? 'Pace (Kokoro speed)' : 'Pace'}: </label>
+        {useNeural ? (
+          <input type="range" min="0.7" max="1.5" step="0.05" value={kSpeed}
+                 onChange={e=>changeKSpeed(parseFloat(e.target.value))} />
+        ) : (
+          <input type="range" min="0.8" max="1.3" step="0.01" value={bRate}
+                 onChange={e=>changeBRate(parseFloat(e.target.value))} />
+        )}
+        <span style={{marginLeft:6, fontSize:12, color:'#555'}}>
+          {(useNeural ? kSpeed : bRate).toFixed(2)}×</span>
+        <span style={{marginLeft:10, fontSize:11, color:'#999'}}>
+          Kokoro sounds best at 100–200 tokens — replies are auto-chunked into sentences.</span>
       </div>
     </div>
   );
@@ -120,6 +281,7 @@ function ConfigPanel(){
         <label>TTS Provider: </label>
         <select value={cfg.TTS_PROVIDER} onChange={e=>setCfg({...cfg, TTS_PROVIDER: e.target.value})}>
           <option value="mock">mock</option>
+          <option value="kokoro">kokoro (local neural)</option>
           <option value="elevenlabs">elevenlabs</option>
         </select>
       </div>

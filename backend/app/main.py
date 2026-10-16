@@ -6,6 +6,7 @@ from pathlib import Path
 from .core.state_machine import CallSession
 from .core.orchestrator import get_stt, get_media, get_llm, get_tts, get_transfer, get_runtime_config, set_runtime_config
 from .core.brain import get_memory, get_brain, normalize as brain_normalize, PROFILE as BRAIN_PROFILE
+from .core.adapters import kokoro_tts
 from .db import init_db, get_session
 from .models import CallRecord, Transcript
 from .qa_endpoints import router as qa_router
@@ -34,6 +35,11 @@ media = get_media()
 llm = get_llm()
 tts = get_tts()
 transfer_adapter = get_transfer()
+
+# Pre-load the Kokoro model in the background so the first live call is fast.
+if kokoro_tts.available():
+    import threading
+    threading.Thread(target=kokoro_tts.warm, daemon=True, name="kokoro-warm").start()
 
 # In-memory sessions (for prototype only)
 sessions = {}
@@ -114,6 +120,51 @@ def brain_learn(payload: dict):
     )
     return {"learned": ok, "utterance": utterance, "intent": intent,
             "memory": get_memory().status()}
+
+
+# ---------------- neural voice (Kokoro-82M local TTS) -----------------------
+@app.get("/api/tts/voices")
+def tts_voices():
+    """The20 US-English Kokoro voices with model-card grades + load state."""
+    return kokoro_tts.status()
+
+
+@app.post("/api/tts")
+def tts_synth(payload: dict):
+    """Synthesize a reply to WAV bytes using the chosen Kokoro voice.
+
+    Body: {text, voice?, speed?}. The frontend pipelines at sentence level
+    (plays chunk N while pre-fetching chunk N+1) so first audio lands fast.
+    """
+    text = (payload.get("text") or "").strip()
+    if not text:
+        return JSONResponse({"error": "text is required"}, status_code=400)
+    voice = (payload.get("voice") or get_runtime_config().get("TTS_VOICE")
+             or kokoro_tts.DEFAULT_VOICE)
+    speed = payload.get("speed")
+    if speed is None:
+        try:
+            speed = float(get_runtime_config().get("TTS_SPEED") or kokoro_tts.DEFAULT_SPEED)
+        except ValueError:
+            speed = kokoro_tts.DEFAULT_SPEED
+    try:
+        wav = kokoro_tts.synthesize(text, voice=voice, speed=speed)
+    except Exception as e:
+        return JSONResponse({"error": f"synthesis failed: {e}", "voice": voice},
+                            status_code=503)
+    from fastapi.responses import Response
+    return Response(content=wav, media_type="audio/wav",
+                    headers={"X-Kokoro-Voice": voice,
+                             "Cache-Control": "no-store"})
+
+
+@app.post("/api/tts/warm")
+def tts_warm():
+    """Kick a background warm-up (model + voices) and report state."""
+    import threading
+    if kokoro_tts.available() and not kokoro_tts.is_warmed():
+        threading.Thread(target=kokoro_tts.warm, daemon=True).start()
+    return kokoro_tts.status()
 
 @app.post("/api/call/start")
 async def start_call(session: Session = Depends(get_session)):

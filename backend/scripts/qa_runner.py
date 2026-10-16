@@ -87,27 +87,43 @@ def _pick_voice(engine):
 def synth_tts(text: str, out_file: Path):
     """Synthesize `text` into `out_file`, returning the path on success else None.
 
-    A fresh engine is created per file: reusing a single pyttsx3 engine across
-    save_to_file()/runAndWait() calls can deadlock on Windows (SAPI). The work
-    also runs on a daemon thread with a timeout so a wedged engine can never
-    hang the whole scenario run. Voice/pace/pitch are tuned for a young,
-    energetic speaker (female voice preferred when available).
+    Preferred engine is the local Kokoro-82M neural voice (Adriene's real voice
+    pack, chosen via QA_TTS_VOICE/TTS_VOICE); pyttsx3 remains the fallback when
+    kokoro isn't installed. Both run on a daemon thread with a timeout so a
+    wedged engine can never hang the whole scenario run. Voice/pace/pitch for
+    the pyttsx3 path are tuned for a young, energetic speaker.
     """
-    if pyttsx3 is None:
-        return None
+    def _kokoro() -> bool:
+        from app.core.adapters import kokoro_tts
+        if not kokoro_tts.available():
+            return False
+        voice = os.getenv("QA_TTS_VOICE") or os.getenv("TTS_VOICE") or kokoro_tts.DEFAULT_VOICE
+        try:
+            speed = float(os.getenv("QA_TTS_SPEED", "1.0"))
+        except ValueError:
+            speed = 1.0
+        wav = kokoro_tts.synthesize(text, voice=voice, speed=speed)
+        out_file.write_bytes(wav)
+        return True
 
-    def _speak():
-        engine = pyttsx3.init()
-        voice = _pick_voice(engine)
-        if voice is not None:
-            engine.setProperty('voice', voice.id)
-        engine.setProperty('rate', 178)      # brisk but clear (default 200)
-        engine.setProperty('pitch', 58)      # slightly higher = younger/friendlier
-        engine.save_to_file(text, str(out_file))
-        engine.runAndWait()
-        engine.stop()
+    def _run():
+        try:
+            if _kokoro():
+                return
+        except Exception as e:
+            print(f"[qa_runner] Kokoro TTS unavailable ({e}); falling back to pyttsx3")
+        if pyttsx3 is not None:
+            engine = pyttsx3.init()
+            voice = _pick_voice(engine)
+            if voice is not None:
+                engine.setProperty('voice', voice.id)
+            engine.setProperty('rate', 178)      # brisk but clear (default 200)
+            engine.setProperty('pitch', 58)      # slightly higher = younger/friendlier
+            engine.save_to_file(text, str(out_file))
+            engine.runAndWait()
+            engine.stop()
 
-    worker = threading.Thread(target=_speak, daemon=True)
+    worker = threading.Thread(target=_run, daemon=True)
     worker.start()
     worker.join(TTS_TIMEOUT)
     if worker.is_alive():

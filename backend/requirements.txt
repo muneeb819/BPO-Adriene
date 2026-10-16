@@ -5,3 +5,4 @@ python-multipart>=0.0.9
 pytest>=8.0
 sqlmodel>=0.0.22
 pyttsx3>=2.90 ; sys_platform == 'win32'  # per-turn audio for the QA runner (optional elsewhere)
+kokoro>=0.9.4  # local neural TTS (Kokoro-82M, 20 US-English voices); optional — browser voice is the fallback
