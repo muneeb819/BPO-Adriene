@@ -42,9 +42,17 @@ Contents
 - Manual: Use the web UI Playground (Start Mock Call) and follow the scripted utterances from the scenario template.
 - Automated (scripted runner): A simple Python runner can connect to the websocket endpoint, replay user utterances with timing, capture transcripts and events, and generate a result JSON for the scenario.
 
-Example: pseudo-command to run scenario runner (script located in backend/scripts/qa_runner.py — implement if desired):
+Example: commands to run the scenario runner (backend/scripts/qa_runner.py):
 
-  python backend/scripts/qa_runner.py --scenario docs/scenarios/cooperative_caller.json --out results/report.json
+  # run a single scenario
+  python backend/scripts/qa_runner.py --scenario docs/scenarios/cooperative_caller.json
+
+  # run every scenario under docs/scenarios/ and write a consolidated CSV
+  python backend/scripts/qa_runner.py --all
+
+Outputs go to backend/qa_outputs/ (per-scenario report_{id}.json, per-turn {id}_turn_N_agent.wav,
+results_summary.csv). Browse them at http://localhost:3000/qa_reports.html or via
+GET /api/qa/reports, GET /api/qa/report/{filename}, GET /api/qa/download/{filename}.
 
 The runner should:
 - Create or reuse an agent instance and prompt version
@@ -90,7 +98,7 @@ The runner should:
 - Steps to repro, collect logs, capture full websocket transcript and event JSON, and escalate
 
 10) Next steps (optional automation)
-- Implement backend/scripts/qa_runner.py to execute scenarios automatically and persist results
+- [done] backend/scripts/qa_runner.py executes scenarios automatically and persists results (JSON report per scenario, per-turn audio, results_summary.csv); reports are served by GET /api/qa/reports and rendered at http://localhost:3000/qa_reports.html
 - Add GitHub Actions workflow to run a small set of scenario smoke tests on PRs (mocks only) to validate regressions
 - Add UI to list test reports and compare runs between prompt versions
 

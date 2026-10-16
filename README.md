@@ -25,4 +25,33 @@ Next steps (coming PRs / work):
 - Implement LLM prompt templates & safety/compliance checks
 - Implement recordings storage, analytics, and labeling UI
 
+## QA Runner
+
+Deterministic scenario runner for local QA (mock STT/LLM/TTS, no telephony):
+
+```bash
+# run every scenario under docs/scenarios/ and write a consolidated CSV
+python backend/scripts/qa_runner.py --all
+
+# or a single scenario
+python backend/scripts/qa_runner.py --scenario docs/scenarios/cooperative_caller.json
+```
+
+Outputs land in `backend/qa_outputs/`:
+
+- `report_{scenario_id}.json` — per-turn transcript, latency metrics and pass/fail checks
+- `{scenario_id}_turn_{n}_agent.wav` — per-turn agent audio (requires `pyttsx3`, Windows)
+- `results_summary.csv` — one row per scenario when running `--all`
+
+With the backend and frontend running, browse them at http://localhost:3000/qa_reports.html
+or call the API directly:
+
+- `GET /api/qa/reports` — list reports and artifacts
+- `GET /api/qa/report/{filename}` — a report JSON
+- `GET /api/qa/download/{filename}` — stream audio / CSV artifacts
+
+Scenario inputs live in `docs/scenarios/*.json` (see `docs/SCENARIO_TEMPLATES.md`).
+The frontend dev server proxies `/api` and `/ws` to `http://localhost:8000`; override with
+`PROXY_TARGET=http://localhost:<port> npm start` if the backend runs elsewhere.
+
 License: MIT

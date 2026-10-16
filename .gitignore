@@ -53,9 +53,19 @@ data/voice_preview/
 data/voices/
 data/demo_recording/
 
+# Node
+node_modules/
+frontend/build/
+
 # Logs
 *.log
 logs/
+
+# QA runner outputs: reports/CSV are tracked, generated audio is not
+backend/qa_outputs/*.wav
+
+# Local dev database
+dev.db
 
 # Test coverage
 htmlcov/
