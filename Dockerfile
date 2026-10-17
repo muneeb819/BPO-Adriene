@@ -8,7 +8,7 @@
 #    docker build -t bpo-adriene .
 #    cp .env.example .env          # set SECRET_KEY (and any LLM key)
 #    docker compose up -d
-#    open http://localhost:8055/
+#    open https://localhost:8055/
 #
 #  First start downloads the Kokoro model (~330 MB) into the hf-cache volume
 #  (~40 s); every start after that is instant.
@@ -49,6 +49,10 @@ RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/wh
 COPY backend/requirements.txt ./backend/requirements.txt
 RUN pip install --no-cache-dir -r backend/requirements.txt
 
+# Self-signed dev cert for HTTPS (localhost). Replace backend/certs/ with a real
+# cert in production, or terminate TLS at a reverse proxy.
+RUN python backend/scripts/gen_cert.py
+
 COPY backend/ ./backend/
 COPY --from=webbuild /web/build ./frontend/build
 COPY frontend/public ./frontend/public
@@ -60,6 +64,6 @@ RUN mkdir -p /app/data
 EXPOSE 8055
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=180s --retries=3 \
-    CMD python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8055/api/health', timeout=4).status==200 else 1)"
+    CMD python -c "import ssl,urllib.request,sys; ctx=ssl._create_unverified_context(); sys.exit(0 if urllib.request.urlopen('https://127.0.0.1:8055/api/health', context=ctx, timeout=4).status==200 else 1)"
 
-CMD ["python", "-m", "uvicorn", "backend.app.main:app", "--host", "0.0.0.0", "--port", "8055"]
+CMD ["python", "-m", "uvicorn", "backend.app.main:app", "--host", "0.0.0.0", "--port", "8055", "--ssl-keyfile", "backend/certs/key.pem", "--ssl-certfile", "backend/certs/cert.pem"]

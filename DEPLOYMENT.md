@@ -6,7 +6,7 @@ voice engine, and the built React console.
 
 | | |
 |---|---|
-| Console + API | `http://<host>:8055/` |
+| Console + API | `https://<host>:8055/` |
 | Health probe | `GET /api/health` → `{"status":"ok"}` |
 | Voice engine | in-process (Kokoro-82M, 20 US-English voices) |
 | Storage | SQLite call log + self-learning memory (one data dir) |
@@ -21,7 +21,7 @@ git clone -b feature/ai-voice-bot-scaffold https://github.com/muneeb819/BPO-Adri
 cd BPO-Adriene
 cp .env.example .env            # set SECRET_KEY; add an LLM key if you want one
 docker compose up -d --build
-open http://localhost:8055/
+open https://localhost:8055/
 ```
 
 Two named volumes persist everything that matters:
@@ -130,6 +130,23 @@ reports at `/qa_reports.html`.
 - Transfer adapters (ViciDial/Twilio) return `False` when unconfigured — the
   call continues; set `TRANSFER_PROVIDER=twilio` + `TWILIO_*` credentials in
   `.env` before going live with handoffs.
+
+## 8. HTTPS / TLS
+
+The bot serves **HTTPS by default** (self-signed dev cert for `localhost`):
+
+- Launchers (`start.*`) generate `backend/certs/cert.pem` + `key.pem` on first run
+  via `backend/scripts/gen_cert.py` (10-year validity, SAN=localhost/127.0.0.1).
+- Your browser will warn "Your connection is not private" — click
+  **Advanced → Proceed to localhost** (expected for a self-signed cert).
+- The frontend already switches to `wss://` automatically when served over HTTPS,
+  so the microphone (secure context) and the WebSocket call flow keep working.
+- The dev proxy (`npm start`) targets `https://localhost:8055` with `secure: false`.
+
+**Production:** drop a real `cert.pem` + `key.pem` into `backend/certs/` (mounted
+as a volume in Docker) **or** terminate TLS at a reverse proxy (nginx/Caddy/
+Traefik) and run uvicorn on plain HTTP behind it. Never ship the self-signed
+cert to users.
 
 ## 9. Troubleshooting
 
