@@ -137,8 +137,11 @@ The bot serves **HTTPS by default** (self-signed dev cert for `localhost`):
 
 - Launchers (`start.*`) generate `backend/certs/cert.pem` + `key.pem` on first run
   via `backend/scripts/gen_cert.py` (10-year validity, SAN=localhost/127.0.0.1).
-- Your browser will warn "Your connection is not private" — click
-  **Advanced → Proceed to localhost** (expected for a self-signed cert).
+- Your browser will warn "Your connection is not private" on first visit — click
+  **Advanced → Proceed to localhost** (expected for a self-signed cert). To skip
+  the warning entirely on this machine, install the cert once into your user
+  trust store: `certutil -user -addstore Root backend/certs/cert.pem` (Windows)
+  or add it to your OS trust store (macOS/Linux). Restart the browser after.
 - The frontend already switches to `wss://` automatically when served over HTTPS,
   so the microphone (secure context) and the WebSocket call flow keep working.
 - The dev proxy (`npm start`) targets `https://localhost:8055` with `secure: false`.
