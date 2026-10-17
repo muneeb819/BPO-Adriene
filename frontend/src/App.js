@@ -281,8 +281,8 @@ function VoicePanel(){
       <h3 style={{marginTop:0}}>🔊 Adriene's Voice</h3>
 
       <div>
-        <label>Engine: </label>
-        <select value={neuralReady ? activeEngine : 'browser'} onChange={changeEngine} disabled={!neuralReady}>
+<label htmlFor="voice-engine">Engine: </label>
+        <select id="voice-engine" value={neuralReady ? activeEngine : 'browser'} onChange={changeEngine} disabled={!neuralReady}>
           <option value="neural">Adriene Neural — Kokoro-82M (20 US voices, local)</option>
           <option value="browser">Browser voices (offline fallback)</option>
         </select>
@@ -294,8 +294,8 @@ function VoicePanel(){
 
       {useNeural ? (
         <div style={{marginTop:8}}>
-          <label>Voice: </label>
-          <select value={kSel} onChange={e=>changeKVoice(e.target.value)}>
+<label htmlFor="voice-kokoro">Voice: </label>
+          <select id="voice-kokoro" value={kSel} onChange={e=>changeKVoice(e.target.value)}>
             <optgroup label="🚺 Female">{females.map(opt)}</optgroup>
             <optgroup label="🚹 Male">{males.map(opt)}</optgroup>
           </select>
@@ -303,8 +303,8 @@ function VoicePanel(){
         </div>
       ) : (
         <div style={{marginTop:8}}>
-          <label>Voice: </label>
-          <select value={bSel || (pickVoice(bVoices,'')||{}).name || ''} onChange={e=>changeBVoice(e.target.value)}>
+<label htmlFor="voice-browser">Voice: </label>
+          <select id="voice-browser" value={bSel || (pickVoice(bVoices,'')||{}).name || ''} onChange={e=>changeBVoice(e.target.value)}>
             {bVoices.length === 0 && <option value="">(browser voices loading…)</option>}
             {[...bVoices].sort((a,b)=>scoreVoice(b)-scoreVoice(a)).map(v =>
               <option key={v.name} value={v.name}>{v.name} — {v.lang}</option>)}
@@ -314,12 +314,12 @@ function VoicePanel(){
       )}
 
       <div style={{marginTop:8}}>
-        <label>{useNeural ? 'Pace (Kokoro speed)' : 'Pace'}: </label>
+        <label htmlFor="voice-pace">{useNeural ? 'Pace (Kokoro speed)' : 'Pace'}: </label>
         {useNeural ? (
-          <input type="range" min="0.7" max="1.5" step="0.05" value={kSpeed}
+          <input id="voice-pace" type="range" min="0.7" max="1.5" step="0.05" value={kSpeed}
                  onChange={e=>changeKSpeed(parseFloat(e.target.value))} />
         ) : (
-          <input type="range" min="0.8" max="1.3" step="0.01" value={bRate}
+          <input id="voice-pace" type="range" min="0.8" max="1.3" step="0.01" value={bRate}
                  onChange={e=>changeBRate(parseFloat(e.target.value))} />
         )}
         <span style={{marginLeft:6, fontSize:12, color:'#555'}}>
@@ -351,23 +351,23 @@ function ConfigPanel(){
     <div style={{marginBottom:20}}>
       <h3>Runtime Config</h3>
       <div>
-        <label>STT Provider: </label>
-        <select value={cfg.STT_PROVIDER} onChange={e=>setCfg({...cfg, STT_PROVIDER: e.target.value})}>
+<label htmlFor="cfg-stt">STT Provider: </label>
+        <select id="cfg-stt" value={cfg.STT_PROVIDER} onChange={e=>setCfg({...cfg, STT_PROVIDER: e.target.value})}>
           <option value="mock">mock</option>
           <option value="deepgram">deepgram</option>
         </select>
       </div>
       <div>
-        <label>TTS Provider: </label>
-        <select value={cfg.TTS_PROVIDER} onChange={e=>setCfg({...cfg, TTS_PROVIDER: e.target.value})}>
+<label htmlFor="cfg-tts">TTS Provider: </label>
+        <select id="cfg-tts" value={cfg.TTS_PROVIDER} onChange={e=>setCfg({...cfg, TTS_PROVIDER: e.target.value})}>
           <option value="mock">mock</option>
           <option value="kokoro">kokoro (local neural)</option>
           <option value="elevenlabs">elevenlabs</option>
         </select>
       </div>
       <div>
-        <label>LLM Provider: </label>
-        <select value={cfg.LLM_PROVIDER} onChange={e=>setCfg({...cfg, LLM_PROVIDER: e.target.value})}>
+<label htmlFor="cfg-llm">LLM Provider: </label>
+        <select id="cfg-llm" value={cfg.LLM_PROVIDER} onChange={e=>setCfg({...cfg, LLM_PROVIDER: e.target.value})}>
           <option value="mock">mock (local brain)</option>
           <option value="openai">openai</option>
           <option value="anthropic">anthropic</option>
