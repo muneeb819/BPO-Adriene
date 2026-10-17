@@ -687,7 +687,8 @@ export default function App(){
                           cursor:'pointer'}}>
             {micOn ? '⏹' : '🎤'}
           </button>
-          <input value={input} onChange={e=>setInput(e.target.value)} onKeyDown={onKey}
+          <input id="customer-utterance" name="customer_utterance" autoComplete="off"
+                  value={input} onChange={e=>setInput(e.target.value)} onKeyDown={onKey}
                  placeholder={micOn ? 'Listening… (or type here)'
                                     : 'Answer naturally — any wording works…'}
                  style={{width:'62%', padding:8}} />
