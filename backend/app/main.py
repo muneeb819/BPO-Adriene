@@ -7,7 +7,7 @@ from .core.state_machine import CallSession
 from .core.orchestrator import get_stt, get_media, get_llm, get_tts, get_transfer, get_runtime_config, set_runtime_config
 from .core.brain import get_memory, get_brain, normalize as brain_normalize, PROFILE as BRAIN_PROFILE
 from .core.adapters import kokoro_tts
-from .db import init_db, get_session
+from .db import init_db, get_session, engine as db_engine
 from .models import CallRecord, Transcript
 from .qa_endpoints import router as qa_router
 from sqlmodel import Session, select
@@ -254,7 +254,7 @@ async def websocket_call(websocket: WebSocket, session_id: str):
         # send initial prompt from state machine
         await websocket.send_json({"type": "bot_prompt", "text": session_obj.get_next_bot_prompt()})
         # DB session per connection
-        with __import__('sqlmodel').Session(__import__('sqlmodel').create_engine("sqlite:///./dev.db", connect_args={"check_same_thread": False})) as dbconn:
+        with Session(db_engine) as dbconn:
             # find call record
             db_rec = dbconn.exec(select(CallRecord).where(CallRecord.session_id == session_id)).first()
             while True:
