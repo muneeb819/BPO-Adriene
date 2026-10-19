@@ -1,5 +1,16 @@
+# Load ./.env before anything reads the environment (DATABASE_URL, LiveKit keys…).
+# Harmless when the file is absent — docker/systemd inject the variables instead.
+try:
+    from pathlib import Path as _EnvPath
+
+    from dotenv import load_dotenv as _load_dotenv
+
+    _load_dotenv(_EnvPath(__file__).resolve().parents[2] / ".env")
+except Exception:
+    pass
+
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Depends
-from fastapi.responses import JSONResponse, FileResponse
+from fastapi.responses import JSONResponse, FileResponse, RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pathlib import Path
@@ -10,6 +21,7 @@ from .core.adapters import kokoro_tts
 from .db import init_db, get_session
 from .models import CallRecord, Transcript
 from .qa_endpoints import router as qa_router
+from .livekit_endpoints import router as livekit_router
 from sqlmodel import Session, select
 from datetime import datetime, timezone
 import json
@@ -28,6 +40,9 @@ app.add_middleware(
 
 # QA reports & artifacts (produced by backend/scripts/qa_runner.py)
 app.include_router(qa_router)
+
+# LiveKit: room tokens + status for the debug console (worker: livekit_agent.py)
+app.include_router(livekit_router)
 
 # Initialize DB
 init_db()
@@ -320,6 +335,16 @@ def recordings_page():
     return FileResponse(FRONTEND_PUBLIC / 'recordings.html', media_type='text/html')
 
 
+@app.get('/livekit.html')
+def livekit_page():
+    """LiveKit debug console (frontend/public/livekit.html).
+
+    Joins a room from the browser and talks to the agent worker. The token is
+    signed by /api/livekit/token on this server, so the page works behind the
+    same origin as the rest of the console."""
+    return FileResponse(FRONTEND_PUBLIC / 'livekit.html', media_type='text/html')
+
+
 def _media_info(path: Path) -> dict:
     info = {'name': path.name, 'bytes': path.stat().st_size,
             'url': f'/media/{path.name}'}
@@ -366,8 +391,18 @@ async def media_file(name: str):
     raise HTTPException(status_code=404, detail='not found')
 
 
+# Vendor assets used by the standalone debug pages (livekit.html -> livekit-client).
+FRONTEND_VENDOR = FRONTEND_PUBLIC / 'vendor'
+if FRONTEND_VENDOR.is_dir():
+    app.mount('/vendor', StaticFiles(directory=str(FRONTEND_VENDOR)), name='vendor')
+
 if FRONTEND_BUILD.is_dir():
     # Registered last, so /api/* and /ws/* above win. Serves the built React app
     # (index.html + assets) — the browser then talks to the same origin it loaded
     # from, which is what makes the WebSocket call flow work without a dev proxy.
     app.mount('/', StaticFiles(directory=str(FRONTEND_BUILD), html=True), name='frontend')
+else:
+    @app.get('/', include_in_schema=False)
+    def root_without_build():
+        """No React build yet (dev run): send the browser to the LiveKit console."""
+        return RedirectResponse('/livekit.html')

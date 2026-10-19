@@ -79,3 +79,7 @@ htmlcov/
 # Distribution
 *.tar.gz
 *.whl
+
+# LiveKit runtime artifacts (call transcripts + the offline smoke-test audio)
+data/livekit_calls/
+backend/qa_outputs/livekit_demo*

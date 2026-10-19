@@ -107,6 +107,36 @@ python backend/scripts/qa_runner.py --all      # scenario QA, writes backend/qa_
 Recordings of every scenario turn are browsable at `/recordings.html`, QA
 reports at `/qa_reports.html`.
 
+## 6b. LiveKit worker (optional second process)
+
+The web console runs without LiveKit; the LiveKit agent is a separate worker that
+connects *out* to LiveKit (no inbound ports). It can run on the same box or any
+machine that can reach your LiveKit project.
+
+```bash
+pip install -r requirements-livekit.txt
+python scripts/fetch_neural_voices.py          # local voice (~60 MB, once)
+python livekit_agent.py start                  # production worker
+```
+
+`.env` keys it reads: `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`,
+`LIVEKIT_AGENT_NAME`, `LIVEKIT_STT_PROVIDER`, `LIVEKIT_TTS_PROVIDER`,
+`LIVEKIT_TRANSFER_NUMBER`. Tokens for the browser console are signed by the API
+process (`POST /api/livekit/token`), so both processes need the same `.env`.
+
+systemd unit (in addition to `deploy/bpo-adriene.service`):
+
+```ini
+[Service]
+WorkingDirectory=/opt/bpo-adriene
+EnvironmentFile=/opt/bpo-adriene/.env
+ExecStart=/opt/bpo-adriene/.venv/bin/python livekit_agent.py start
+Restart=always
+```
+
+Saved calls land in `data/livekit_calls/` (JSON: transcript, disposition,
+qualification fields). See **[docs/LIVEKIT.md](docs/LIVEKIT.md)**.
+
 ## 7. Systemd (bare-metal Linux)
 
 `deploy/bpo-adriene.service` is ready: copy to `/etc/systemd/system/`, adjust

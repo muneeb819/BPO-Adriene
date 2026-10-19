@@ -1,0 +1,374 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Adriene · LiveKit Debug Console</title>
+<style>
+  :root{
+    --ink:#0f172a; --muted:#64748b; --line:#e2e8f0; --bg:#f6f7fb; --card:#fff;
+    --blue:#1f6feb; --blue-soft:#eef4ff; --amber:#fff8e1; --green:#2f6f4f;
+    --green-soft:#f0faf4; --red:#b42318; --red-soft:#fef3f2;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Inter,Arial,sans-serif}
+  header{display:flex;align-items:center;gap:12px;padding:16px 24px;background:#fff;
+    border-bottom:1px solid var(--line);position:sticky;top:0;z-index:5;flex-wrap:wrap}
+  .dot{width:11px;height:11px;border-radius:50%;background:var(--blue);
+    box-shadow:0 0 0 4px var(--blue-soft)}
+  h1{font-size:16px;margin:0;font-weight:650;letter-spacing:-.2px}
+  .sub{color:var(--muted);font-size:12.5px}
+  .pills{display:flex;gap:8px;margin-left:auto;flex-wrap:wrap}
+  .pill{font-size:12px;padding:4px 10px;border-radius:999px;border:1px solid var(--line);
+    background:#fff;color:var(--muted);white-space:nowrap}
+  .pill.ok{background:var(--green-soft);border-color:#cde9d8;color:var(--green)}
+  .pill.warn{background:var(--amber);border-color:#f2e2ae;color:#8a6100}
+  .pill.bad{background:var(--red-soft);border-color:#f6cfc9;color:var(--red)}
+  main{display:grid;grid-template-columns:360px 1fr;gap:18px;padding:18px 24px 40px;
+    max-width:1400px;margin:0 auto}
+  @media (max-width:900px){main{grid-template-columns:1fr}}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px;
+    margin-bottom:16px}
+  .card h2{font-size:13px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);
+    margin:0 0 12px}
+  label{display:block;font-size:12px;color:var(--muted);margin:10px 0 4px}
+  input{width:100%;padding:9px 11px;border:1px solid var(--line);border-radius:8px;
+    font:inherit;background:#fff;color:var(--ink)}
+  input:focus{outline:2px solid var(--blue-soft);border-color:var(--blue)}
+  .row{display:flex;gap:8px;margin-top:14px;flex-wrap:wrap}
+  button{border:0;border-radius:8px;padding:10px 16px;font:inherit;font-weight:600;
+    cursor:pointer;transition:.15s}
+  button:disabled{opacity:.5;cursor:not-allowed}
+  .primary{background:var(--blue);color:#fff}
+  .primary:hover:not(:disabled){background:#1a5fd0}
+  .ghost{background:#fff;border:1px solid var(--line);color:var(--ink)}
+  .danger{background:var(--red-soft);color:var(--red);border:1px solid #f6cfc9}
+  .kv{display:grid;grid-template-columns:120px 1fr;gap:6px 10px;font-size:12.5px}
+  .kv dt{color:var(--muted)}
+  .kv dd{margin:0;overflow-wrap:anywhere}
+  .checks{display:flex;flex-direction:column;gap:8px;margin-top:4px}
+  .check{display:flex;gap:8px;align-items:flex-start;font-size:12.5px}
+  .check .mark{width:16px;flex:0 0 16px;text-align:center}
+  .stage{background:#fff;border:1px solid var(--line);border-radius:12px;display:flex;
+    flex-direction:column;min-height:520px;overflow:hidden}
+  .stage-head{display:flex;align-items:center;gap:10px;padding:14px 16px;
+    border-bottom:1px solid var(--line)}
+  .stage-head .who{font-weight:650;font-size:13px}
+  .live{width:8px;height:8px;border-radius:50%;background:#cbd5e1}
+  .live.on{background:#16a34a;box-shadow:0 0 0 4px #dcfce7}
+  .log{flex:1;overflow:auto;padding:16px;display:flex;flex-direction:column;gap:10px;
+    min-height:320px;max-height:56vh}
+  .turn{max-width:82%;padding:10px 13px;border-radius:12px;font-size:13.5px;white-space:pre-wrap;
+    border:1px solid transparent}
+  .turn.bot{background:var(--amber);border-color:#f2e2ae;align-self:flex-start;
+    border-top-left-radius:4px}
+  .turn.user{background:var(--blue);color:#fff;align-self:flex-end;border-top-right-radius:4px}
+  .turn.sys{background:#f8fafc;border-color:var(--line);color:var(--muted);align-self:center;
+    font-size:12px;max-width:100%}
+  .turn .meta{display:block;font-size:10.5px;letter-spacing:.04em;text-transform:uppercase;
+    opacity:.65;margin-bottom:3px}
+  .composer{display:flex;gap:8px;padding:12px 16px;border-top:1px solid var(--line);background:#fbfcff}
+  .composer input{flex:1}
+  .hint{color:var(--muted);font-size:12px;padding:0 16px 12px}
+  .warnbox{background:var(--amber);border:1px solid #f2e2ae;color:#8a6100;border-radius:10px;
+    padding:10px 12px;font-size:12.5px;margin-bottom:12px;display:none}
+  .warnbox.show{display:block}
+  code{background:#f1f5f9;padding:1px 5px;border-radius:5px;font-size:12px}
+  .foot{color:var(--muted);font-size:12px;text-align:center;padding:0 24px 24px}
+  a{color:var(--blue)}
+</style>
+</head>
+<body>
+<header>
+  <div class="dot"></div>
+  <div>
+    <h1>Adriene · LiveKit Debug Console</h1>
+    <div class="sub">Medicare qualification agent — brain, voice and script run locally</div>
+  </div>
+  <div class="pills">
+    <span class="pill" id="pill-sdk">SDK …</span>
+    <span class="pill" id="pill-config">Config …</span>
+    <span class="pill" id="pill-net">Network …</span>
+    <span class="pill" id="pill-room">Idle</span>
+  </div>
+</header>
+
+<main>
+  <section>
+    <div class="card">
+      <h2>Join a room</h2>
+      <label for="room">Room</label>
+      <input id="room" value="adriene-debug" autocomplete="off" />
+      <label for="identity">Your name</label>
+      <input id="identity" autocomplete="off" />
+      <div class="row">
+        <button class="primary" id="join">Join &amp; talk</button>
+        <button class="ghost" id="mute" disabled>Mute</button>
+        <button class="danger" id="leave" disabled>Leave</button>
+      </div>
+      <div class="hint" style="padding:10px 0 0">
+        The agent must be running: <code>python livekit_agent.py dev</code>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Agent stack</h2>
+      <dl class="kv" id="stack"><dt>loading…</dt><dd></dd></dl>
+      <div class="checks" id="checks"></div>
+    </div>
+
+    <div class="card">
+      <h2>Configuration</h2>
+      <dl class="kv" id="config"><dt>loading…</dt><dd></dd></dl>
+    </div>
+  </section>
+
+  <section>
+    <div class="warnbox" id="warnbox"></div>
+    <div class="stage">
+      <div class="stage-head">
+        <span class="live" id="live"></span>
+        <span class="who" id="who">Not connected</span>
+        <span class="sub" id="peers" style="margin-left:auto"></span>
+      </div>
+      <div class="log" id="log">
+        <div class="turn sys">Join a room to talk to Adriene. You can speak or type —
+          both drive the same dialogue brain.</div>
+      </div>
+      <form class="composer" id="composer">
+        <input id="text" placeholder="Type instead of talking… (the agent hears it as caller speech)" autocomplete="off" disabled />
+        <button class="primary" id="send" type="submit" disabled>Send</button>
+      </form>
+      <div class="hint">Microphone audio is sent straight to LiveKit; the agent's replies
+        arrive as audio and live transcripts.</div>
+      <audio id="remote-audio" autoplay></audio>
+    </div>
+  </section>
+</main>
+
+<div class="foot">
+  LiveKit room tokens are signed locally by <code>/api/livekit/token</code> ·
+  saved calls land in <code>data/livekit_calls/</code>
+</div>
+
+<script src="/vendor/livekit-client.umd.js"></script>
+<script>
+(function () {
+  "use strict";
+
+  const $ = (id) => document.getElementById(id);
+  const LK = window.LivekitClient;
+
+  let room = null;
+  let micEnabled = true;
+  const audioEl = $("remote-audio");
+
+  // ---------------------------------------------------------------- helpers
+  function setPill(el, text, state) {
+    el.textContent = text;
+    el.className = "pill" + (state ? " " + state : "");
+  }
+  function time() {
+    return new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  }
+  function addTurn(kind, text, who) {
+    const log = $("log");
+    const div = document.createElement("div");
+    div.className = "turn " + kind;
+    const meta = document.createElement("span");
+    meta.className = "meta";
+    meta.textContent = (who || (kind === "bot" ? "Adriene" : "You")) + " · " + time();
+    div.appendChild(meta);
+    div.appendChild(document.createTextNode(text));
+    log.appendChild(div);
+    log.scrollTop = log.scrollHeight;
+    return div;
+  }
+  function sys(text) { addTurn("sys", text, "system"); }
+  function warn(text) {
+    const box = $("warnbox");
+    box.textContent = text;
+    box.classList.add("show");
+  }
+
+  // -------------------------------------------------------------- bootstrap
+  async function loadStatus() {
+    try {
+      const res = await fetch("/api/livekit/status");
+      const st = await res.json();
+      const stack = st.stack || {};
+
+      setPill($("pill-sdk"), st.sdk_installed ? "SDK installed" : "SDK missing",
+              st.sdk_installed ? "ok" : "bad");
+      setPill($("pill-config"), st.configured ? "LiveKit configured" : "LiveKit not configured",
+              st.configured ? "ok" : "bad");
+      setPill($("pill-net"), st.reachable ? "Server ↔ LiveKit" : "Server has no route",
+              st.reachable ? "ok" : "warn");
+
+      $("config").innerHTML =
+        row("URL", st.url || "—") +
+        row("API key", st.api_key || "—") +
+        row("Secret", st.api_secret_set ? "set" : "missing") +
+        row("Dispatch", st.dispatch || "—") +
+        row("Transfer", st.transfer_number || "end call after line") +
+        row("Calls saved", st.call_log_dir || "—");
+
+      $("stack").innerHTML =
+        row("Speech in", stack.stt || "—") +
+        row("Voice", stack.tts || "—") +
+        row("Dialogue", stack.llm || "—") +
+        row("VAD", stack.vad ? "silero" : "off") +
+        row("Voices", (stack.voices || []).join(", ") || "none installed");
+
+      const checks = $("checks");
+      checks.innerHTML = "";
+      (stack.warnings || []).forEach((w) => {
+        const d = document.createElement("div");
+        d.className = "check";
+        d.innerHTML = '<span class="mark">⚠</span><span>' + escapeHtml(w) + "</span>";
+        checks.appendChild(d);
+      });
+
+      if (!st.configured) {
+        warn("LiveKit credentials are missing on the server. Add LIVEKIT_URL, " +
+             "LIVEKIT_API_KEY and LIVEKIT_API_SECRET to .env and restart.");
+      } else if (!st.reachable) {
+        warn("This server cannot reach " + st.url + " (network/firewall). Your browser " +
+             "can usually still connect — the agent worker must run somewhere that can " +
+             "reach LiveKit.");
+      }
+    } catch (err) {
+      setPill($("pill-config"), "Status unavailable", "bad");
+    }
+  }
+  function row(k, v) { return "<dt>" + escapeHtml(k) + "</dt><dd>" + escapeHtml(String(v)) + "</dd>"; }
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, (c) => ({
+      "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+    }[c]));
+  }
+
+  // ------------------------------------------------------------------- join
+  async function join() {
+    if (!LK) { warn("livekit-client failed to load (vendor/livekit-client.umd.js)."); return; }
+    const roomName = $("room").value.trim() || "adriene-debug";
+    const identity = $("identity").value.trim() || "caller-" + Math.random().toString(16).slice(2, 8);
+
+    $("join").disabled = true;
+    try {
+      const res = await fetch("/api/livekit/token", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ room: roomName, identity }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || "token request failed");
+
+      room = new LK.Room({ adaptiveStream: true, dynacast: true });
+      wire(room, identity);
+      await room.connect(data.url, data.token);
+      await room.localParticipant.setMicrophoneEnabled(true);
+      try { await room.startAudio(); } catch (e) { /* autoplay guard */ }
+
+      setPill($("pill-room"), "In " + data.room, "ok");
+      $("live").classList.add("on");
+      $("who").textContent = "Connected as " + identity;
+      $("mute").disabled = false;
+      $("leave").disabled = false;
+      $("text").disabled = false;
+      $("send").disabled = false;
+      sys("Joined “" + data.room + "”. Agent dispatch: " +
+          (data.explicit_dispatch ? data.agent_name : "automatic") +
+          ". Speak, or type below.");
+      refreshPeers();
+    } catch (err) {
+      $("join").disabled = false;
+      warn("Could not join: " + err.message);
+      setPill($("pill-room"), "Join failed", "bad");
+    }
+  }
+
+  function wire(r, identity) {
+    r.on(LK.RoomEvent.TrackSubscribed, (track) => {
+      if (track.kind === LK.Track.Kind.Audio) track.attach(audioEl);
+    });
+    r.on(LK.RoomEvent.ParticipantConnected, (p) => {
+      sys(p.identity + " joined the room");
+      refreshPeers();
+    });
+    r.on(LK.RoomEvent.ParticipantDisconnected, (p) => {
+      sys(p.identity + " left the room");
+      refreshPeers();
+    });
+    r.on(LK.RoomEvent.Disconnected, () => {
+      sys("disconnected");
+      resetUI();
+    });
+    r.on(LK.RoomEvent.TranscriptionReceived, (segments, participant) => {
+      segments.forEach((seg) => {
+        const who = participant && participant.identity !== identity ? "Adriene" : "You";
+        const kind = who === "Adriene" ? "bot" : "user";
+        let node = document.getElementById("seg-" + seg.id);
+        if (!node) node = addTurn(kind, seg.text, who);
+        else {
+          const textNode = node.lastChild;
+          if (textNode && textNode.nodeType === 3) textNode.textContent = seg.text;
+        }
+        node.id = "seg-" + seg.id;
+      });
+    });
+  }
+
+  function refreshPeers() {
+    if (!room) return;
+    const peers = [room.localParticipant, ...room.remoteParticipants.values()];
+    const names = peers.map((p) => p.identity);
+    const agents = peers.filter((p) => p.isAgent || /agent/i.test(p.identity));
+    $("peers").textContent = names.length + " in room" +
+      (agents.length ? " · agent present" : " · waiting for agent");
+  }
+
+  function resetUI() {
+    room = null;
+    $("join").disabled = false;
+    $("mute").disabled = true;
+    $("leave").disabled = true;
+    $("text").disabled = true;
+    $("send").disabled = true;
+    $("live").classList.remove("on");
+    $("who").textContent = "Not connected";
+    $("peers").textContent = "";
+    setPill($("pill-room"), "Idle", "");
+  }
+
+  // --------------------------------------------------------------- controls
+  $("join").addEventListener("click", join);
+  $("leave").addEventListener("click", async () => {
+    if (room) await room.disconnect();
+    resetUI();
+  });
+  $("mute").addEventListener("click", async () => {
+    if (!room) return;
+    micEnabled = !micEnabled;
+    await room.localParticipant.setMicrophoneEnabled(micEnabled);
+    $("mute").textContent = micEnabled ? "Mute" : "Unmute";
+    $("mute").className = micEnabled ? "ghost" : "primary";
+  });
+  $("composer").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const text = $("text").value.trim();
+    if (!text || !room) return;
+    const payload = new TextEncoder().encode(JSON.stringify({ type: "user_text", text }));
+    await room.localParticipant.publishData(payload, { reliable: true });
+    addTurn("user", text, "You (typed)");
+    $("text").value = "";
+  });
+
+  $("identity").value = "caller-" + Math.random().toString(16).slice(2, 8);
+  loadStatus();
+  setInterval(loadStatus, 15000);
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,32 @@
+# =============================================================================
+# BPO Adriene — LiveKit agent runtime
+#
+#   pip install -r requirements-livekit.txt
+#   python livekit_agent.py dev
+#
+# The agent runs the project's own brain + local neural voice inside a LiveKit
+# room. Nothing below needs a cloud key; the optional block is only for upgrades.
+# =============================================================================
+
+-r requirements.txt
+
+# --- LiveKit worker + WebRTC ------------------------------------------------
+livekit-agents[silero]>=1.8,<2     # agent framework + Silero VAD (bundled ONNX)
+livekit-api>=1.0                   # room tokens / room service (REST)
+
+# --- zero-key speech (default stack) ----------------------------------------
+# Local speech recognition. Downloads base.en (~75 MB) on first use and caches it
+# in ~/.cache/huggingface.
+faster-whisper>=1.0
+
+# Local neural voice (Piper/ONNX), the same engine as the browser console.
+# Fetch a voice once: python scripts/fetch_neural_voices.py
+piper-tts>=1.8
+onnxruntime>=1.17
+
+# --- optional cloud upgrades (uncomment the ones you have keys for) ----------
+# livekit-plugins-deepgram>=1.8      # DEEPGRAM_API_KEY   -> streaming STT
+# livekit-plugins-elevenlabs>=1.8    # ELEVENLABS_API_KEY -> expressive TTS
+# livekit-plugins-openai>=1.8        # OPENAI_API_KEY     -> whisper STT / TTS / LLM
+# livekit-plugins-anthropic>=1.8     # ANTHROPIC_API_KEY  -> LLM
+# livekit-plugins-google>=1.8        # GEMINI_API_KEY     -> LLM
