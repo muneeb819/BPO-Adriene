@@ -45,16 +45,18 @@ mobile app, or a phone call can talk to it.
 
 ```bash
 cp .env.example .env            # add LIVEKIT_URL / LIVEKIT_API_KEY / LIVEKIT_API_SECRET
-./start_livekit.sh              # debug mode (installs deps + a local voice on first run)
+./start_livekit.sh              # macOS / Linux / Git Bash
+.\start_livekit.bat             # Windows (cmd or double-click)
+.\start_livekit.ps1             # Windows (PowerShell)
 # then open http://localhost:8055/livekit.html and join the room
 ```
 
 | command | what it does |
 |---|---|
-| `./start_livekit.sh dev` | worker in debug mode (hot reload, DEBUG logs) |
+| `./start_livekit.sh dev` (`start_livekit.bat`) | worker in debug mode (DEBUG logs) |
 | `python livekit_agent.py start` | production worker |
 | `python livekit_agent.py console` | local terminal session, no server |
-| `./start_livekit.sh doctor` | credentials + network + token + stack check |
+| `./start_livekit.sh doctor` (`start_livekit.bat doctor`) | credentials + network + token + stack check |
 | `python scripts/livekit_smoke_test.py` | offline brain → voice check (writes a WAV) |
 
 With no cloud keys the call runs fully locally: Silero VAD → local Whisper →

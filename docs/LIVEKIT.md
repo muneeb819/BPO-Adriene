@@ -53,7 +53,9 @@ python3 -m venv .venv
 ## 3. Run — debug mode
 
 ```bash
-./start_livekit.sh dev              # == python livekit_agent.py dev --log-level debug
+./start_livekit.sh dev              # macOS / Linux / Git Bash
+.\start_livekit.bat                 # Windows (cmd) — same thing
+.\start_livekit.ps1                 # Windows (PowerShell)
 ```
 
 You should see:
@@ -75,11 +77,16 @@ Other entry points:
 | `./start_livekit.sh` | same as `dev` |
 | `python livekit_agent.py start` | production worker |
 | `python livekit_agent.py console` | local terminal session, no server, no keys |
-| `./start_livekit.sh doctor` | config + network + token + stack diagnosis |
+| `./start_livekit.sh doctor` (`start_livekit.bat doctor`) | config + network + token + stack diagnosis |
 | `python scripts/livekit_smoke_test.py` | offline brain→voice check, writes a WAV |
 
-`console` needs PortAudio (`libportaudio2` / `brew install portaudio`). On a
-headless box use the smoke test instead.
+`console` needs PortAudio (`libportaudio2` / `brew install portaudio`, on Windows
+it ships with the driver). On a headless box use the smoke test instead.
+
+> **Windows note:** use `.\start_livekit.bat` from `cmd` (or double-click it).
+> From Git Bash, `./start_livekit.sh` works too. If either says *No such file or
+> directory*, you are not in the project folder — `cd` into the directory that
+> contains `.git` and `livekit_agent.py` first.
 
 ## 4. Talk to it — the browser console
 
