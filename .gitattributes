@@ -1,0 +1,5 @@
+# Shell launchers must keep LF endings — CRLF breaks them in Git Bash / WSL.
+*.sh   text eol=lf
+*.bat  text eol=crlf
+*.ps1  text eol=crlf
+*.py   text eol=lf
