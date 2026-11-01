@@ -1,0 +1,95 @@
+name: CI
+
+# Every push to main and every pull request. The other workflow in this
+# directory (python-publish.yml) only builds a release on tag, so nothing here
+# ran a test or a linter before this file existed.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# A newer push to the same branch cancels the older run.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: ruff
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: pip-lint-${{ hashFiles('requirements-dev.txt') }}
+
+      - name: Install linters
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: Lint agent/, server/, backend/, tests/, scripts/
+        run: ruff check . --output-format=github
+
+      - name: Check formatting is stable (non-blocking while the tree is cleaned up)
+        run: ruff format --check . || true
+
+  test:
+    name: pytest (python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: pip-${{ matrix.python-version }}-${{ hashFiles('requirements-lock.txt') }}
+
+      # Installed from the lockfile, not the loose requirements.txt, so CI tests
+      # the exact dependency set a fresh clone reproduces.
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-lock.txt
+
+      - name: Run the test suite
+        run: pytest tests/ backend/tests/ -v --maxfail=1
+
+  # A clone with nothing configured must still install and pass. This is the job
+  # that would have caught the suite not being runnable at all.
+  fresh-clone:
+    name: fresh clone, documented commands only
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: make install
+        run: make install
+
+      - name: make test
+        run: make test
+
+      - name: make lint
+        run: make lint
