@@ -12,7 +12,7 @@
 
 # --- LiveKit worker + WebRTC ------------------------------------------------
 livekit-agents[silero]>=1.8,<2     # agent framework + Silero VAD (bundled ONNX)
-livekit-api>=1.0                   # room tokens / room service (REST)
+livekit-api>=1.2.2                   # room tokens / room service (REST)
 
 # --- zero-key speech (default stack) ----------------------------------------
 # Local speech recognition. Downloads base.en (~75 MB) on first use and caches it
