@@ -1,8 +1,6 @@
 """CLI: run an interactive console session, a scripted smoke-test, or serve ARI + web."""
 from __future__ import annotations
 
-import json
-import re
 import sys
 
 from agent.config import Config
@@ -17,7 +15,7 @@ def cmd_console():
 
 
 def cmd_demo():
-    from agent.call_session import ConsoleChannel, run_session
+    from agent.call_session import run_session
 
     config = Config.load()
     print("=== BEAT-BASED SMOKE TEST (scripted, no keys required for console) ===")
