@@ -3,12 +3,9 @@
 """
 from __future__ import annotations
 
-import base64
-import hashlib
 import importlib.util
 import json
 import os
-import secrets
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -19,6 +16,8 @@ from fastapi.responses import HTMLResponse, Response, JSONResponse, FileResponse
 
 from agent.config import Config
 from agent.service import build_stasis_handler
+
+from server import auth as _auth
 
 
 @asynccontextmanager
@@ -59,60 +58,19 @@ _MAX_CALL_LOG = 5000         # keep the newest N on disk
 
 
 # ---------------- access control (WEB_PASSWORD) ----------------
-# Set WEB_PASSWORD in .env whenever the dashboard is reachable by anyone but the
-# machine itself. Every page, API and recording is then behind HTTP Basic auth.
-# Two deliberate details:
-#   * /health stays open, so monitoring (and scripts/healthcheck.py) still works;
-#   * a successful login also sets a cookie, because a browser cannot put an
-#     Authorization header on a WebSocket handshake — the live voice socket would
-#     otherwise be impossible to use from the dashboard.
-# An empty WEB_PASSWORD (the default) leaves the server open, as before.
-_AUTH_COOKIE = "bpo_auth"
-_AUTH_OPEN_PATHS = ("/health",)
-_AUTH_REALM = 'Basic realm="BPO Adriene"'
+# The implementation lives in server/auth.py; these aliases keep the existing
+# call sites (and the middleware below) reading naturally, and keep the names
+# tests/tools import from this module.
+_auth.configure(lambda: getattr(CONFIG, "web_password", ""))
 
-
-def _web_password() -> str:
-    """Read at request time, so setting it (or the studio's Use) applies at once."""
-    return (getattr(CONFIG, "web_password", "") or "").strip()
-
-
-def _auth_token(password: str) -> str:
-    return hashlib.sha256(f"bpo-adriene:{password}".encode("utf-8")).hexdigest()[:32]
-
-
-def _basic_credentials(header: str) -> "tuple[str, str] | None":
-    if not header.lower().startswith("basic "):
-        return None
-    try:
-        raw = base64.b64decode(header.split(None, 1)[1].strip()).decode("utf-8")
-    except Exception:                                            # noqa: BLE001
-        return None
-    user, _, password = raw.partition(":")
-    return user, password
-
-
-def _authorised(request: Request) -> bool:
-    password = _web_password()
-    creds = _basic_credentials(request.headers.get("authorization", ""))
-    if creds and secrets.compare_digest(creds[1], password):
-        return True
-    cookie = request.cookies.get(_AUTH_COOKIE, "")
-    return bool(cookie) and secrets.compare_digest(cookie, _auth_token(password))
-
-
-def _ws_authorised(websocket: WebSocket) -> bool:
-    password = _web_password()
-    if not password:
-        return True
-    cookie = websocket.cookies.get(_AUTH_COOKIE, "")
-    if cookie and secrets.compare_digest(cookie, _auth_token(password)):
-        return True
-    creds = _basic_credentials(websocket.headers.get("authorization", ""))
-    if creds and secrets.compare_digest(creds[1], password):
-        return True
-    supplied = websocket.query_params.get("password", "")
-    return bool(supplied) and secrets.compare_digest(supplied, password)
+_AUTH_COOKIE = _auth.AUTH_COOKIE
+_AUTH_OPEN_PATHS = _auth.AUTH_OPEN_PATHS
+_AUTH_REALM = _auth.AUTH_REALM
+_web_password = _auth.web_password
+_auth_token = _auth.auth_token
+_basic_credentials = _auth.basic_credentials
+_authorised = _auth.authorised
+_ws_authorised = _auth.ws_authorised
 
 
 @app.middleware("http")
