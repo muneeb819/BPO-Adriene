@@ -18,6 +18,7 @@ from agent.config import Config
 from agent.service import build_stasis_handler
 
 from server import auth as _auth
+from server import call_log
 
 
 @asynccontextmanager
@@ -91,24 +92,12 @@ async def _require_password(request: Request, call_next):
 def _load_call_log() -> None:
     """Load the persisted call log so restarts keep history."""
     global CALL_LOG
-    try:
-        with open(CALL_LOG_PATH, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        CALL_LOG = data if isinstance(data, list) else []
-    except (OSError, ValueError):
-        CALL_LOG = []
+    CALL_LOG = call_log.load(CALL_LOG_PATH)
 
 
 def _save_call_log() -> None:
-    """Atomically persist the call log (idempotent, crash-safe)."""
-    try:
-        os.makedirs(os.path.dirname(CALL_LOG_PATH) or ".", exist_ok=True)
-        tmp = CALL_LOG_PATH + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(CALL_LOG[-_MAX_CALL_LOG:], f, ensure_ascii=False, indent=1)
-        os.replace(tmp, CALL_LOG_PATH)
-    except OSError:
-        pass
+    """Atomically persist the call log (crash-safe; see server/call_log.py)."""
+    call_log.save(CALL_LOG, CALL_LOG_PATH, _MAX_CALL_LOG)
 
 
 def log_call(entry: dict) -> dict:
