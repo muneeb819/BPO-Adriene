@@ -1,8 +1,6 @@
 """Speech-to-text providers. Console provider is for local testing without a PBX/keys."""
 from __future__ import annotations
 
-import os
-from dataclasses import dataclass
 
 from .config import Config
 

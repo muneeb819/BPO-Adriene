@@ -12,11 +12,11 @@ the policy layer, only phrasing moves to the model.
 from __future__ import annotations
 
 import os
-from typing import Dict, List, Optional
+from typing import List, Optional
 
 from .nlu import analyze
 from .knowledge import retrieve as kb_retrieve
-from .persona import Persona, PROFILE
+from .persona import Persona
 from .memory import Memory, get_memory
 from . import compliance
 

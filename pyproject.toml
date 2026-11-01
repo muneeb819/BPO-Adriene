@@ -1,0 +1,54 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bpo-adriene"
+version = "0.1.0"
+description = "Local-first Medicare outreach voice agent: dialogue brain, neural voice, LiveKit worker"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Proprietary" }
+
+# ---------------------------------------------------------------------------
+# pytest — both suites, both import roots, so a bare `pytest` runs everything
+# ---------------------------------------------------------------------------
+[tool.pytest.ini_options]
+pythonpath = [".", "backend"]
+testpaths = ["tests", "backend/tests"]
+addopts = "-ra"
+# async tests are function-scoped; state it so pytest-asyncio stops warning
+asyncio_default_fixture_loop_scope = "function"
+
+# ---------------------------------------------------------------------------
+# ruff — the lint gate CI enforces
+#
+# Deliberately the E/F correctness rules first: undefined names, unused
+# imports and variables, syntax-level mistakes. Style rules (E501 line length
+# and friends) are off so the gate stays about things that can be wrong, which
+# is why it can be made blocking today.
+# ---------------------------------------------------------------------------
+[tool.ruff]
+target-version = "py310"
+line-length = 120
+exclude = [
+    ".git", ".venv", "venv", "node_modules", "frontend", "build", "dist",
+    "__pycache__", "data",
+]
+src = ["agent", "server", "backend", "tests", "scripts"]
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]
+ignore = [
+    "E501",   # line length — handled by the formatter, not the gate
+    "F541",   # f-string without placeholders (harmless, 2 occurrences)
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Diagram/verification scripts: matplotlib artists and short-lived locals are
+# held by name on purpose (layout) and the verify script is deliberately dense.
+"docs/make_diagrams.py" = ["F841"]
+"scripts/verify_voice_studio.py" = ["E701", "E702", "F841"]
+# Test doubles and fixtures legitimately import inside functions and rebind.
+"tests/*" = ["F401", "F841"]
+"backend/tests/*" = ["F401", "F841"]

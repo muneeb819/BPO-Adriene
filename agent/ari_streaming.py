@@ -7,10 +7,7 @@ Uses ARI externalMedia for full-duplex RTP.
 from __future__ import annotations
 
 import asyncio
-import json
-import struct
 import time
-import wave
 from pathlib import Path
 
 from .config import Config
@@ -70,16 +67,10 @@ class ARIStreamingBridge:
         if websockets is None:
             raise RuntimeError("websockets package required: pip install websockets")
 
-        import requests
-        r = requests.get(
-            f"{self.ari_base}/channels/{channel_id}",
-            auth=self.ari_auth, timeout=10,
-        )
-        r.raise_for_status()
-        channel = r.json()
-        host = self.config.host if self.config.host != "0.0.0.0" else "127.0.0.1"
-        ext_media_port = 21000
-
+        # NOTE: the channel lookup and externalMedia setup that used to sit here
+        # were assigned and never used — this session never actually opens the
+        # external media channel, so the audio paths below are wired but silent.
+        # Finishing that is a separate piece of work; don't read this as working.
         self.answer(channel_id)
         bridge_id = self.bridge_create(f"streaming-{channel_id}")
         self.bridge_add(bridge_id, channel_id)

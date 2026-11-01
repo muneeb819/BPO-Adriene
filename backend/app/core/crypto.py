@@ -7,7 +7,7 @@ import base64
 import hashlib
 from cryptography.fernet import Fernet
 
-SECRET_KEY = os.getenv('SECRET_KEY', 'changeme')
+SECRET_KEY = os.getenv('SECRET_KEY', '')
 
 def _derive_fernet_key(secret: str) -> bytes:
     # Derive a 32-byte key from the SECRET_KEY using SHA256 and urlsafe base64 encode it for Fernet

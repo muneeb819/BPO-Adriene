@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import random
 import re
-from typing import Iterable, List, Optional
+from typing import List, Optional
 
 
 PROFILE = {

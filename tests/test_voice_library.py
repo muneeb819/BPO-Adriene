@@ -990,6 +990,7 @@ def test_api_preview_falls_back_to_a_local_server_when_the_standby_is_the_same_e
     assert dsp.load_audio(r.content)[0]
 
 
+@needs_voices
 def test_api_preview_of_a_piper_voice_needs_no_fallback(studio, monkeypatch):
     """The happy path: the requested engine speaks, fallback flag stays 0."""
     import server.app as appmod

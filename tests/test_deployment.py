@@ -1,9 +1,17 @@
 """Deployment readiness: the files an operator relies on must stay correct.
 
 These tests are about *deployment*, not features — they fail when the launchers,
-the installer, the service units, the container, the readiness report or the
-documented configuration drift away from the code. That drift is exactly what
-breaks an install on someone else's machine.
+the service unit, the container, the readiness report or the documented
+configuration drift away from the code. That drift is exactly what breaks an
+install on someone else's machine.
+
+NOTE ON ARCHITECTURE (2026-11): the bot is a SINGLE process — FastAPI serves the
+REST API, the WebSocket call flow, the Kokoro voice engine and the built console
+on one port (:8055). An earlier design ran two processes (`cli.py serve` plus a
+separate `neural_tts_server.py` on :8880, with a `bpo-voice.service` unit and a
+`deploy/docker-entrypoint.sh`); those files are gone and these tests used to
+assert them, so the whole file was failing. It now pins the architecture the
+code actually has.
 """
 from __future__ import annotations
 
@@ -21,17 +29,46 @@ ROOT = Path(__file__).resolve().parents[1]
 CONFIG_PY = ROOT / "agent" / "config.py"
 ENV_EXAMPLE = ROOT / ".env.example"
 
+# Environment variables the *runtime* sets for itself or inherits from the
+# shell/terminal. They are not configuration and must never be in .env.example.
+_ENV_NOISE = {
+    "TERM", "ANSICON", "FORCE_COLOR", "WT_SESSION", "TZ", "PATH", "HOME",
+    "LANG", "PYTHONPATH", "PYTHONUNBUFFERED", "PIP_NO_CACHE_DIR",
+    "HF_HUB_DISABLE_XET", "NODE_ENV",
+}
+
 
 def _documented_env_names() -> "set[str]":
-    """Every environment variable `Config.load()` reads."""
-    source = CONFIG_PY.read_text()
-    return set(re.findall(r'env(?:_list)?\(\s*"([A-Z0-9_]+)"', source))
+    """Every environment variable the code base reads, wherever it reads it.
+
+    Config.load() handles almost all of them, but a few (SECRET_KEY, DEBUG,
+    DATABASE_URL, the LiveKit worker's settings) are read directly by other
+    modules. Scanning the whole tree means .env.example is checked against
+    reality instead of against one file that is easy to outgrow.
+    """
+    names: "set[str]" = set()
+    for path in ROOT.rglob("*.py"):
+        if any(part in {".git", "node_modules", "frontend", "__pycache__",
+                        "venv", ".venv"} for part in path.parts):
+            continue
+        source = path.read_text(errors="ignore")
+        names |= set(re.findall(r'env(?:_list)?\(\s*"([A-Z0-9_]+)"', source))
+        names |= set(re.findall(r'os\.environ\.get\(\s*"([A-Z0-9_]+)"', source))
+        names |= set(re.findall(r'os\.getenv\(\s*["\']([A-Z0-9_]+)["\']', source))
+        names |= set(re.findall(r'os\.environ\[\s*["\']([A-Z0-9_]+)["\']', source))
+    return names - _ENV_NOISE
 
 
 def _example_env_names() -> "set[str]":
+    """Names documented in .env.example, including commented-out ones.
+
+    A commented `# OPENAI_API_KEY=sk-...` documents an optional setting just as
+    well as an uncommented line; requiring every key to be live would mean a
+    fresh copy exports a dozen empty cloud keys.
+    """
     names = set()
     for line in ENV_EXAMPLE.read_text().splitlines():
-        m = re.match(r"\s*([A-Z][A-Z0-9_]*)\s*=", line)
+        m = re.match(r"\s*#?\s*([A-Z][A-Z0-9_]*)\s*=", line)
         if m:
             names.add(m.group(1))
     return names
@@ -50,9 +87,7 @@ def test_env_example_documents_every_setting():
 def test_env_example_has_no_unknown_keys():
     """Keys that the code never reads are worse than missing ones — they mislead."""
     extra = _example_env_names() - _documented_env_names()
-    # DEBUG is read directly by the app, not through Config.
-    allowed = {"DEBUG"}
-    assert not (extra - allowed), f"in .env.example but read by nothing: {sorted(extra - allowed)}"
+    assert not extra, f"in .env.example but read by nothing: {sorted(extra)}"
 
 
 def test_env_example_configures_a_working_local_setup():
@@ -68,23 +103,33 @@ def test_env_example_configures_a_working_local_setup():
             mp.setenv(key, value)
         cfg = Config.load()
 
-    assert cfg.tts_provider == "piper", "the documented default must be the keyless local engine"
-    assert cfg.piper_voice, "a default voice makes 'Test voice' work on a fresh install"
+    assert cfg.tts_provider == "kokoro", "the documented default must be the in-process keyless engine"
+    assert cfg.kokoro_voice, "a default voice makes 'Test voice' work on a fresh install"
     assert cfg.port and cfg.host
-    assert cfg.stt_provider in {"console", "deepgram"}
+    assert cfg.stt_provider in {"console", "mock", "deepgram"}
+    assert not cfg.web_password, "the example must not ship a dashboard password"
 
 
 def test_env_example_warns_about_the_dashboard_password():
     text = ENV_EXAMPLE.read_text()
     assert "WEB_PASSWORD" in text
-    assert re.search(r"password.{0,120}(reachable|networked|LAN)", text, re.I | re.S), \
-        "the example must say when a password is required"
+    assert re.search(r"password.{0,160}(reachable|networked|LAN|open)", text, re.I | re.S), \
+        "the example must warn that an open dashboard is reachable by others"
 
 
 def test_env_example_documents_a_standby_that_is_not_installed():
     """The standby has to be explained, or people configure failover to nothing."""
     text = ENV_EXAMPLE.read_text().lower()
     assert "standby" in text and "empty = no failover" in text
+
+
+def test_env_example_requires_a_secret_key_without_a_default():
+    """A shipped default secret is a shipped vulnerability."""
+    text = ENV_EXAMPLE.read_text()
+    line = next(ln for ln in text.splitlines() if ln.startswith("SECRET_KEY="))
+    assert line.strip() == "SECRET_KEY=", f"SECRET_KEY must have no default value: {line!r}"
+    assert re.search(r"SECRET_KEY", text.split("SECRET_KEY=")[0]) and "REQUIRED" in text, \
+        "SECRET_KEY must be marked required"
 
 
 # ---------------------------------------------------------------------------
@@ -95,19 +140,26 @@ LAUNCHERS = ("start.ps1", "start.bat", "start.sh")
 
 
 @pytest.mark.parametrize("name", LAUNCHERS)
-def test_launcher_starts_the_voice_engine(name):
-    """Without this, a fresh install has a dashboard and no audio."""
+def test_launcher_starts_the_app(name):
+    """Without this, a fresh install starts nothing."""
     text = (ROOT / name).read_text()
-    assert "neural_tts_server.py" in text, f"{name} does not start the voice server"
-    assert "cli.py" in text, f"{name} does not start the app"
+    assert "uvicorn" in text and "backend.app.main:app" in text, f"{name} does not start the app"
 
 
 @pytest.mark.parametrize("name", LAUNCHERS)
 def test_launcher_bootstraps_a_fresh_machine(name):
+    """A clone with no venv, no deps and no .env must still start with one command."""
     text = (ROOT / name).read_text()
     assert "-m venv" in text, f"{name} does not create a virtual environment"
     assert "requirements.txt" in text, f"{name} does not install dependencies"
     assert ".env.example" in text and ".env" in text, f"{name} does not create .env"
+
+
+@pytest.mark.parametrize("name", LAUNCHERS)
+def test_launchers_do_not_default_to_the_dev_secret(name):
+    """No shipped fallback secret — an unset SECRET_KEY must stop the launch."""
+    text = (ROOT / name).read_text()
+    assert "dev-secret" not in text, f"{name} still hardcodes a fallback secret"
 
 
 def test_start_sh_is_valid_and_executable():
@@ -119,79 +171,67 @@ def test_start_sh_is_valid_and_executable():
 
 def test_start_sh_supports_the_documented_flags():
     text = (ROOT / "start.sh").read_text()
-    for flag in ("--serve", "--check", "--tests", "--no-voice", "--port", "--voice-port"):
+    for flag in ("--serve", "--check", "--tests", "--port", "--no-voice"):
         assert flag in text, f"start.sh does not accept {flag}"
+    header = text.split("set -e")[0]
+    for flag in ("--serve", "--check", "--tests", "--port", "--no-voice"):
+        assert flag in header, f"{flag} is accepted but not documented in the usage header"
 
 
-def test_launchers_do_not_hardcode_a_stale_port():
-    """The launcher and .env must agree, or the dashboard link lies."""
-    example = ENV_EXAMPLE.read_text()
-    assert re.search(r"^PORT=8000\s*$", example, re.M)
-    assert "8880" in (ROOT / "start.sh").read_text()
-    assert "8880" in (ROOT / "start.ps1").read_text()
+def test_launchers_agree_on_the_port():
+    """The launcher, .env.example and Dockerfile must agree, or the link lies."""
+    assert re.search(r"^PORT=8055\s*$", ENV_EXAMPLE.read_text(), re.M)
+    for name in LAUNCHERS:
+        assert "8055" in (ROOT / name).read_text(), f"{name} does not use port 8055"
+    for stale in ("8880", "8000"):
+        for name in LAUNCHERS:
+            assert stale not in (ROOT / name).read_text(), \
+                f"{name} still mentions the retired port {stale}"
 
 
 # ---------------------------------------------------------------------------
-# systemd units
+# systemd unit
 # ---------------------------------------------------------------------------
 
 def test_systemd_units_are_complete():
-    voice = (ROOT / "deploy" / "bpo-voice.service").read_text()
     app = (ROOT / "deploy" / "bpo-adriene.service").read_text()
 
-    assert "ExecStart=" in voice and "neural_tts_server.py" in voice
-    assert "--warm" in voice, "the unit should pre-load the voices"
-    assert "Restart=always" in voice and "WantedBy=multi-user.target" in voice
-    assert "[Service]" in voice and "[Unit]" in voice and "[Install]" in voice
-
-    assert "ExecStart=" in app and "cli.py serve" in app
-    assert "Restart=always" in app
+    assert "ExecStart=" in app and "uvicorn backend.app.main:app" in app
+    assert "Restart=always" in app and "WantedBy=multi-user.target" in app
+    assert "[Service]" in app and "[Unit]" in app and "[Install]" in app
     assert "EnvironmentFile=-" in app, "the unit must read .env (optional, so it can start without)"
-    assert "Requires=bpo-voice.service" in app, "the app depends on the voice engine"
-    assert "After=" in app
+    assert "WorkingDirectory=/opt/bpo-adriene" in app
 
 
 def test_systemd_units_agree_with_the_documented_paths():
     dep = (ROOT / "DEPLOYMENT.md").read_text()
-    for unit in ("deploy/bpo-voice.service", "deploy/bpo-adriene.service"):
-        assert unit in dep, f"{unit} is not mentioned in DEPLOYMENT.md"
+    assert "deploy/bpo-adriene.service" in dep, "the unit is not mentioned in DEPLOYMENT.md"
     assert "/opt/bpo-adriene" in dep
 
 
 # ---------------------------------------------------------------------------
-# Containers
+# Containers — one image, one process, one port
 # ---------------------------------------------------------------------------
 
-def test_dockerfile_runs_both_processes_and_is_healthy():
+def test_dockerfile_runs_the_single_process_and_is_healthy():
     text = (ROOT / "Dockerfile").read_text()
-    assert "EXPOSE 8000" in text and "8880" in text
-    assert "docker-entrypoint.sh" in text
+    assert "EXPOSE 8055" in text
     assert "HEALTHCHECK" in text, "a deployment image needs a healthcheck"
+    assert "/api/health" in text, "the healthcheck must hit the real liveness route"
+    assert "uvicorn" in text and "backend.app.main:app" in text
     # requirements first: rebuilt images must reuse the dependency layer
-    assert text.index("COPY requirements.txt") < text.index("COPY . .")
-    assert "libsndfile1" in text, "soundfile needs libsndfile to decode uploads"
+    assert text.index("COPY backend/requirements.txt") < text.index("COPY backend/ ./backend/")
+    for stale in ("8880", "neural_tts_server.py"):
+        assert stale not in text, f"the image still references the retired two-process design ({stale})"
 
 
-def test_entrypoint_starts_voice_then_app():
-    path = ROOT / "deploy" / "docker-entrypoint.sh"
-    assert os.access(path, os.X_OK), "the entrypoint must be executable"
-    text = path.read_text()
-    assert "neural_tts_server.py" in text and "--warm" in text
-    assert text.index("neural_tts_server.py") < text.index("cli.py serve")
-    assert text.index("exec python cli.py serve") > 0
-    assert "fetch_neural_voices.py" in text
-    check = subprocess.run(["sh", "-n", str(path)], capture_output=True, text=True)
-    assert check.returncode == 0, check.stderr
-
-
-def test_compose_mounts_data_and_reads_env():
+def test_compose_reads_env_and_persists_data():
     text = (ROOT / "docker-compose.yml").read_text()
-    assert "env_file" in text and ".env" in text
-    assert "./data:/app/data" in text, "recordings and the voice library must survive a rebuild"
-    assert "8000:8000" in text
+    assert "env_file" in text and ".env" in text, "compose must load .env"
+    assert "bot-data:/app/data" in text, "recordings and the voice library must survive a rebuild"
+    assert "8055:8055" in text
 
 
-# ---------------------------------------------------------------------------
 # requirements — what a fresh install actually gets
 # ---------------------------------------------------------------------------
 

@@ -6,7 +6,6 @@ every consumer of the LLM adapter gets the same intelligence as the live
 WebSocket call flow. Real providers (OpenAI/Anthropic/Gemini) are picked up
 automatically by ``Brain.generate`` when a key exists in the environment.
 """
-import os
 from typing import List
 
 from ..brain import get_brain

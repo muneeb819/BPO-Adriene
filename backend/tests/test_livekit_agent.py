@@ -14,6 +14,11 @@ from pathlib import Path
 
 import pytest
 
+# The LiveKit worker runtime is an optional extra (requirements-livekit.txt).
+# Without it this module cannot even be imported, so skip instead of erroring
+# the whole collection — the rest of the suite has no LiveKit dependency.
+pytest.importorskip("livekit.agents", reason="install requirements-livekit.txt")
+
 # The token test needs the project's credentials; load ./.env like the app does.
 try:
     from dotenv import load_dotenv
