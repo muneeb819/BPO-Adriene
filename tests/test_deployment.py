@@ -126,7 +126,7 @@ def test_env_example_documents_a_standby_that_is_not_installed():
 def test_env_example_requires_a_secret_key_without_a_default():
     """A shipped default secret is a shipped vulnerability."""
     text = ENV_EXAMPLE.read_text()
-    line = next(l for l in text.splitlines() if l.startswith("SECRET_KEY="))
+    line = next(ln for ln in text.splitlines() if ln.startswith("SECRET_KEY="))
     assert line.strip() == "SECRET_KEY=", f"SECRET_KEY must have no default value: {line!r}"
     assert re.search(r"SECRET_KEY", text.split("SECRET_KEY=")[0]) and "REQUIRED" in text, \
         "SECRET_KEY must be marked required"

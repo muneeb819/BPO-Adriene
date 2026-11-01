@@ -16,7 +16,6 @@ a friendly 400 rather than a 500. Nothing else in the studio depends on it.
 """
 from __future__ import annotations
 
-import base64
 import os
 
 #: Shown in the dashboard and in the 400 body when no key is configured.

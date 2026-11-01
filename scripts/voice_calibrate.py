@@ -7,7 +7,6 @@ import os
 import sys
 
 from elevenlabs.client import ElevenLabs
-from elevenlabs import save
 
 API_KEY = os.environ.get("ELEVENLABS_API_KEY", "")
 

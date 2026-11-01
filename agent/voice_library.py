@@ -15,6 +15,8 @@ voice is always usable by the engine.
 """
 from __future__ import annotations
 
+from array import array
+
 import base64
 import binascii
 import copy
@@ -49,7 +51,7 @@ def validate_engine_language(engine: str, model: str, language: str) -> None:
     """Mirror the /api/tts/switch-voice rules so a saved voice cannot be invalid."""
     if (engine or "").lower() != "chatterbox" or not language or language == "en":
         return
-    from .tts import CHATTERBOX_LANGUAGES, CHATTERBOX_MODELS
+    from .tts import CHATTERBOX_LANGUAGES
 
     if model != "multilingual":
         raise AudioError(
@@ -716,8 +718,6 @@ def clean_tags(tags) -> list:
 
 def _samples(pcm: bytes) -> "array":
     """Raw little-endian s16le bytes -> int16 sample array."""
-    from array import array
-
     if not pcm:
         raise AudioError("no audio data received")
     body = pcm[: len(pcm) - (len(pcm) % 2)]

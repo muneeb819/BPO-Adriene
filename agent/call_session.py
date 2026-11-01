@@ -7,7 +7,6 @@ run_session: drives the beat-based conversation state machine.
 from __future__ import annotations
 
 import os
-import wave
 
 from .ari import ARI
 from .config import Config

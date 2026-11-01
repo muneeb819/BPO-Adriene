@@ -16,7 +16,7 @@ def get_session():
         yield session
 
 # Helper to fetch a provider credential
-from .models import ProviderCredential
+from .models import ProviderCredential  # noqa: E402  (models import the engine above)
 
 def fetch_credential(provider_name: str) -> Optional[ProviderCredential]:
     with Session(engine) as session:

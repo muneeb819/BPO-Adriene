@@ -23,7 +23,7 @@ import os
 import threading
 import time
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, Optional
 
 
 DEFAULT_PATH = Path(os.getenv("BRAIN_MEMORY_PATH") or

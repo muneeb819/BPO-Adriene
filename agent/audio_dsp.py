@@ -359,6 +359,7 @@ def time_stretch(samples: array, rate: int, ratio: float,
     weight = np.zeros(wanted + win, dtype=np.float64)
     window = np.hanning(win)
     view = None
+    prev_tail = None
     if tail_len > 0 and len(x) > tail_len:
         view = np.lib.stride_tricks.sliding_window_view(x, tail_len)
     frame = 0
@@ -370,7 +371,7 @@ def time_stretch(samples: array, rate: int, ratio: float,
         if ideal + win >= len(x):
             break
         start = ideal
-        if view is not None and frame > 0:
+        if view is not None and prev_tail is not None:
             lo = max(0, ideal - search)
             hi = min(len(view) - 1, ideal + search)
             if hi > lo:

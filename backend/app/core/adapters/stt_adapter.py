@@ -7,7 +7,6 @@ real speech-to-text runs in the browser (Web Speech API dictation) and
 arrives here as text; MockSTT passes it through untouched.
 """
 import os
-from typing import Iterable, Iterator
 
 
 class STTAdapter:

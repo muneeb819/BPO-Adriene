@@ -148,6 +148,7 @@ def main() -> int:
     spoken = "I am Lina from EverTrust and this is a spoken sentence, not a beep."
     st, raw, headers = req(base, "POST", "/api/debug/speak", {"text": spoken}, raw=True)
     peak, secs = 0, 0.0
+    bad_wav_error = ""
     try:
         w = wave.open(io.BytesIO(raw))
         secs = w.getnframes() / max(1, w.getframerate())
@@ -155,13 +156,14 @@ def main() -> int:
         peak = max(abs(int.from_bytes(pcm[i:i + 2], "little", signed=True))
                    for i in range(0, len(pcm) - 1, 2)) if pcm else 0
         ok_wav = w.getframerate() == 16000 and w.getnchannels() == 1 and w.getnframes() > 0
-    except Exception as e:
+    except Exception as exc:                   # `e` dies with the except block
+        bad_wav_error = str(exc)
         ok_wav = False
         w = None
     check("live audio is a 16 kHz mono WAV",
           st == 200 and ok_wav and headers.get("content-type") == "audio/wav",
           f"HTTP {st} {headers.get('content-type')} "
-          f"{'bad wav: ' + str(e) if w is None else f'{w.getframerate()}Hz {w.getnchannels()}ch {w.getnframes()}f'}")
+          f"{'bad wav: ' + bad_wav_error if w is None else f'{w.getframerate()}Hz {w.getnchannels()}ch {w.getnframes()}f'}")
     # Silence and "a fixed-length beep" are the two failure modes that make the
     # dashboard look like it has no audio at all: real speech is loud enough and
     # its length scales with the sentence.

@@ -8,7 +8,6 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-from .config import Config
 from .llm import LLM
 from .prompt import CLASSIFIER_PROMPT
 
