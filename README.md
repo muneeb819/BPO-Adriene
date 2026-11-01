@@ -26,15 +26,69 @@ self-learning memory — all running on your machine with zero cloud keys.
 
 ```bash
 # Docker (recommended)
-cp .env.example .env && docker compose up -d --build
+cp .env.example .env          # set SECRET_KEY first — see below
+docker compose up -d --build
 open http://localhost:8055/
 
-# — or bare metal —
-cd frontend && npm install && npm run build && cd ..
-cd backend && pip install -r requirements.txt
-set SECRET_KEY=dev-secret && set DATABASE_URL=sqlite:///./dev.db
-python -m uvicorn backend.app.main:app --port 8055
+# — or bare metal, one command (creates .venv, installs, builds, starts) —
+./start.sh                    # Windows: .\start.ps1  (or double-click start.bat)
 ```
+
+`SECRET_KEY` is **required** and has no default. The launchers stop and tell you
+so rather than starting with a known secret:
+
+```bash
+python -c "import secrets; print(secrets.token_urlsafe(32))"
+# then put SECRET_KEY=<value> in .env
+```
+
+## Install, build, test
+
+Everything below works in a fresh clone with no prior setup. `make` targets and
+the raw commands are equivalent — use whichever you prefer.
+
+```bash
+make install     # python -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
+make build       # cd frontend && npm install && npm run build
+make test        # .venv/bin/python -m pytest tests/ backend/tests/ -v
+make lint        # .venv/bin/python -m ruff check .
+make check       # readiness report: keys, voices, audio (no server)
+make run         # start on http://localhost:8055
+```
+
+| task | command |
+|---|---|
+| install | `make install` |
+| build console | `make build` |
+| **test** | `make test` — or `pytest tests/ backend/tests/ -v` |
+| lint | `make lint` — the same gate CI runs |
+| readiness | `make check` |
+| run | `make run` — or `./start.sh` |
+
+`pytest` with no arguments runs both suites (`pytest.ini` lives in
+`pyproject.toml`; `tests/` is the bot, `backend/tests/` the FastAPI app).
+Tests that need the neural voice models, the LiveKit worker or a cloud key skip
+cleanly instead of failing — install those extras to run them.
+
+### Dependencies are pinned
+
+`requirements.txt` states the supported ranges; **`requirements-lock.txt` pins
+the exact set** (60 packages) that CI and `make install` use, so a fresh clone
+reproduces the same environment. To change a dependency, edit
+`requirements.txt` and re-freeze:
+
+```bash
+make lock        # regenerates requirements-lock.txt in a scratch venv
+```
+
+Dependabot opens weekly PRs for pip, the backend, npm and GitHub Actions.
+
+### CI
+
+`.github/workflows/ci.yml` runs on every push to `main` and every pull request:
+`ruff` over `agent/ server/ backend/ tests/ scripts/`, then the full `pytest`
+suite from the lockfile, plus a `fresh-clone` job that runs nothing but
+`make install && make test && make lint`. A red build blocks the merge.
 
 Windows: `.\start.ps1` · Linux/macOS: `./start.sh` · Tests: `./start.sh --tests`
 
