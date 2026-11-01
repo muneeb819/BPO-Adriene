@@ -17,6 +17,8 @@ license = { text = "Proprietary" }
 pythonpath = [".", "backend"]
 testpaths = ["tests", "backend/tests"]
 addopts = "-ra"
+# async tests are function-scoped; state it so pytest-asyncio stops warning
+asyncio_default_fixture_loop_scope = "function"
 
 # ---------------------------------------------------------------------------
 # ruff — the lint gate CI enforces

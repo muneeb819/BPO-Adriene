@@ -15,6 +15,8 @@ from fastapi import FastAPI, Request, UploadFile, File, WebSocket, WebSocketDisc
 from fastapi.responses import HTMLResponse, Response, JSONResponse, FileResponse
 
 from agent.config import Config
+from agent.logging_config import configure as configure_logging
+from agent.logging_config import get_logger
 from agent.service import build_stasis_handler
 
 from server import auth as _auth
@@ -27,8 +29,14 @@ async def lifespan(_app: FastAPI):
     global MODE
     MODE = "streaming" if CONFIG.tts_provider in ("elevenlabs", "kokoro") else "turn-based"
     _load_call_log()   # restore persisted call history after a restart
+    log.info("server ready", extra={"mode": MODE, "tts_provider": CONFIG.tts_provider,
+                                    "calls_loaded": len(CALL_LOG),
+                                    "auth": "on" if _web_password() else "off"})
     yield
 
+
+configure_logging()
+log = get_logger("server")
 
 app = FastAPI(title="AI Voice Agent", lifespan=lifespan)
 CONFIG = Config.load()
@@ -97,7 +105,10 @@ def _load_call_log() -> None:
 
 def _save_call_log() -> None:
     """Atomically persist the call log (crash-safe; see server/call_log.py)."""
-    call_log.save(CALL_LOG, CALL_LOG_PATH, _MAX_CALL_LOG)
+    if not call_log.save(CALL_LOG, CALL_LOG_PATH, _MAX_CALL_LOG):
+        # Used to be swallowed entirely: calls would vanish on restart with no
+        # trace of why. Still non-fatal — a full disk must not drop the call.
+        log.error("could not persist the call log", extra={"path": CALL_LOG_PATH})
 
 
 def log_call(entry: dict) -> dict:
