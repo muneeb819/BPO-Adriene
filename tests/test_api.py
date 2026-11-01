@@ -347,9 +347,15 @@ def test_debug_voice_reports_the_engine_that_is_actually_selected(tmp_store, tmp
     """
     import server.app as appmod
 
-    for provider, expected in (("piper", "en_US-amy-low"),
-                               ("chatterbox", "ChatterBox/multilingual"),
-                               ("elevenlabs", "Jessica")):
+    # PIPER_VOICE is unset by default, which means the voice server picks the
+    # middle voice — the payload must say "auto", not the model name "piper".
+    for provider, expected in (("piper", "auto"),
+                               # CHATTERBOX_MODEL defaults to "turbo" (the English
+                               # model); the payload echoes whichever is configured.
+                               ("chatterbox", f"ChatterBox/{appmod.CONFIG.chatterbox_model}"),
+                               # the payload mirrors the configured voice, not a
+                               # hardcoded stock name (ELEVENLABS_VOICE=the default)
+                               ("elevenlabs", appmod.CONFIG.elevenlabs_voice)):
         monkeypatch.setattr(appmod.CONFIG, "tts_provider", provider)
         monkeypatch.setattr(appmod.CONFIG, "tts_standby_provider", "")
         with TestClient(appmod.app) as c:

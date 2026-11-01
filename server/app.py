@@ -1179,7 +1179,9 @@ def debug_voice_status():
         "tts_failover_reason": tts.failover_reason,
         "stt_provider": CONFIG.stt_provider,
         "voice": (CONFIG.elevenlabs_voice if tts.active == "elevenlabs"
-                  else (CONFIG.piper_voice or CONFIG.piper_model) if tts.active == "piper"
+                  # PIPER_VOICE="" means the voice server picks the middle voice;
+                  # report that as "auto" rather than echoing the model name.
+                  else (CONFIG.piper_voice or "auto") if tts.active == "piper"
                   else f"ChatterBox/{CONFIG.chatterbox_model}" if tts.active == "chatterbox"
                   else CONFIG.kokoro_voice),
         "llm": CONFIG.llm_provider,
