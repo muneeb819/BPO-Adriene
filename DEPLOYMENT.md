@@ -43,8 +43,23 @@ export SECRET_KEY=dev-secret DATABASE_URL=sqlite:///./dev.db   # setx on Windows
 python -m uvicorn backend.app.main:app --port 8055
 ```
 
+Or let the launcher do all of the above (it creates the virtualenv, installs
+`requirements.txt`, copies `.env.example` to `.env` on first run, then starts):
+
+```bash
+./start.sh                 # Linux/macOS  (--check, --tests, --port N)
+```
+
 Windows one-click: `.\start.ps1` (or double-click `start.bat`).
-Linux/macOS: `./start.sh`. Tests: `./start.sh --tests`.
+Linux/macOS: `./start.sh`. Tests: `./start.sh --tests` (runs both `tests/` and
+`backend/tests/`). Readiness report: `./start.sh --check` or
+`python scripts/healthcheck.py`.
+
+> **`SECRET_KEY` is required.** No launcher ships a default: with it unset they
+> stop and tell you to generate one. Put it in `.env`.
+
+`scripts/setup_local.py` sets the same things up non-interactively for a
+provisioning script or a container build.
 
 > **CPU-only torch.** `kokoro` pulls torch — on GPU-less servers make sure the
 > CPU build is what gets installed (`pip install torch --index-url
@@ -57,7 +72,9 @@ Highlights:
 
 | Variable | Default | Notes |
 |---|---|---|
-| `SECRET_KEY` | — | **set this** in any real deployment |
+| `SECRET_KEY` | — | **required** — no default; the launchers refuse to start without it |
+| `WEB_PASSWORD` | *(empty)* | dashboard password — set it whenever the console is reachable by anyone but you |
+| `DEEPGRAM_API_KEY` | *(empty)* | required only for `STT_PROVIDER=deepgram`; the mic path is browser dictation |
 | `DATABASE_URL` | `sqlite:///./dev.db` | any SQLAlchemy URL (Postgres ready) |
 | `BRAIN_MEMORY_PATH` | `backend/brain_memory.json` | self-learning memory file |
 | `TTS_PROVIDER` | `kokoro` | `kokoro` (neural) · `mock` (browser voice) |
@@ -139,7 +156,8 @@ qualification fields). See **[docs/LIVEKIT.md](docs/LIVEKIT.md)**.
 
 ## 7. Systemd (bare-metal Linux)
 
-`deploy/bpo-adriene.service` is ready: copy to `/etc/systemd/system/`, adjust
+`deploy/bpo-adriene.service` (one unit — the voice engine runs in-process) is
+ready: copy to `/etc/systemd/system/`, adjust
 `WorkingDirectory`/`User`, put env in `/opt/bpo-adriene/.env`, then
 `systemctl enable --now bpo-adriene`.
 
@@ -148,6 +166,8 @@ qualification fields). See **[docs/LIVEKIT.md](docs/LIVEKIT.md)**.
 - Serve behind TLS in production (the console uses mic + WebSocket — browsers
   require a secure context; `localhost` is exempt, public hosts are not).
 - Back up the data dir: SQLite DB + `brain_memory.json` are the only state.
+- **Backup:** `tar czf adriene-backup.tgz data/` (or snapshot the `bot-data`
+  volume) captures everything worth keeping; restore by unpacking it back.
 - The Kokoro cache volume is safe to delete (re-downloads on next use).
 - Transfer adapters (ViciDial/Twilio) return `False` when unconfigured — the
   call continues; wire credentials before going live with handoffs.
@@ -160,4 +180,6 @@ qualification fields). See **[docs/LIVEKIT.md](docs/LIVEKIT.md)**.
 | Very slow first synthesis | expected (~40 s cold); warm with `POST /api/tts/warm` |
 | Mic button says unsupported | use Chrome/Edge (Web Speech API); needs HTTPS or localhost |
 | No sound, only text | check the Voice Panel engine is `neural` and `POST /api/tts` returns audio |
+| `docker compose` has no env | `cp .env.example .env` — compose reads `.env` via `env_file` |
+| Launcher exits 1 on startup | `SECRET_KEY` is unset; generate one and write it to `.env` |
 | LLM not upgrading | `GET /api/brain/status` → `llm_ready`; check the key env var spelling |

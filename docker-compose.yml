@@ -6,6 +6,12 @@ services:
     image: bpo-adriene
     ports:
       - "8055:8055"
+    # Load every documented setting from .env (see .env.example). Optional, so a
+    # clone without .env still starts; the environment block below only pins the
+    # handful of vars compose needs to interpolate.
+    env_file:
+      - path: .env
+        required: false
     environment:
       SECRET_KEY: ${SECRET_KEY:-change-me}
       # attach an LLM by adding ONE of these to .env — no code change:
