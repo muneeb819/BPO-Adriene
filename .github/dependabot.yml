@@ -1,0 +1,40 @@
+version: 2
+updates:
+  # Python dependencies — the lockfile is what CI installs, so keep it fresh.
+  - package-ecosystem: pip
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    groups:
+      # Batch the low-risk churn so it arrives as one reviewable PR.
+      python-minor:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+    labels: ["dependencies"]
+    commit-message:
+      prefix: "chore(deps)"
+
+  - package-ecosystem: pip
+    directory: "/backend"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 3
+    labels: ["dependencies", "backend"]
+
+  # Keep the actions used by ci.yml and python-publish.yml current.
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    labels: ["dependencies", "ci"]
+
+  # The console is built with npm and the React tree needs its own updates.
+  - package-ecosystem: npm
+    directory: "/frontend"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
+    labels: ["dependencies", "frontend"]
