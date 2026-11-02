@@ -4,3 +4,11 @@
 pytest>=8.0          # the test suite and ./start.sh --tests
 pytest-asyncio>=0.23 # async tests in backend/tests/
 ruff>=0.6            # lint gate (.github/workflows/ci.yml)
+mypy>=1.11           # type gate (.github/workflows/ci.yml)
+
+# backend/ (the FastAPI app in backend/app/) has its own requirements set. CI
+# runs backend/tests/, so the app's own imports must resolve here too — without
+# these, backend/app/db.py and core/crypto.py fail to import and the tests only
+# pass because nothing imports them yet.
+sqlmodel==0.0.48
+cryptography==50.0.2

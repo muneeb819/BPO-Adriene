@@ -22,6 +22,8 @@ from .db import init_db, get_session
 from .models import CallRecord, Transcript
 from .qa_endpoints import router as qa_router
 from .livekit_endpoints import router as livekit_router
+from typing import Any
+
 from sqlmodel import Session, select
 from datetime import datetime, timezone
 import json
@@ -60,7 +62,7 @@ if kokoro_tts.available():
     threading.Thread(target=kokoro_tts.warm, daemon=True, name="kokoro-warm").start()
 
 # In-memory sessions (for prototype only)
-sessions = {}
+sessions: "dict[str, Any]" = {}  # session_id -> orchestrator (prototype only)
 
 @app.post("/api/config")
 async def update_config(payload: dict):
@@ -240,7 +242,11 @@ async def transfer_call(session_id: str, db: Session = Depends(get_session)):
 
 @app.get("/api/calls")
 def list_calls(db: Session = Depends(get_session)):
-    rows = db.exec(select(CallRecord).order_by(CallRecord.created_at.desc())).all()
+    # created_at is an SQLModel instrumented column: .desc() exists at runtime but
+    # not on the declared annotation (datetime).
+    rows = db.exec(
+        select(CallRecord).order_by(CallRecord.created_at.desc())  # type: ignore[attr-defined]
+    ).all()
     out = []
     for r in rows:
         out.append({"id": r.id, "session_id": r.session_id, "state": r.state, "created_at": r.created_at.isoformat()})
@@ -251,7 +257,9 @@ def get_call(call_id: int, db: Session = Depends(get_session)):
     rec = db.exec(select(CallRecord).where(CallRecord.id == call_id)).first()
     if not rec:
         return JSONResponse({"error": "call not found"}, status_code=404)
-    transcripts = db.exec(select(Transcript).where(Transcript.call_id == rec.id).order_by(Transcript.timestamp)).all()
+    transcripts = db.exec(
+        select(Transcript).where(Transcript.call_id == rec.id).order_by(Transcript.timestamp)  # type: ignore[arg-type]
+    ).all()
     tx = [{"role": t.role, "text": t.text, "timestamp": t.timestamp.isoformat()} for t in transcripts]
     return {"id": rec.id, "session_id": rec.session_id, "state": rec.state, "transcripts": tx}
 
