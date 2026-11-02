@@ -14,8 +14,10 @@ import threading
 
 from ..resample import PCM16Resampler, TARGET_RATE, resample_pcm16
 
+from ._contract import EngineMixin
 
-class KokoroEngine:
+
+class KokoroEngine(EngineMixin):
     """Kokoro synthesis, mixed into :class:`agent.tts.TTS`."""
 
     def _kokoro_payload(self, text: str, response_format: str) -> dict:

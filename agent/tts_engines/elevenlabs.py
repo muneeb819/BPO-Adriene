@@ -6,10 +6,12 @@ tuned with the stability / similarity / style / speaker-boost settings.
 """
 from __future__ import annotations
 
+from ._contract import EngineMixin
+
 import asyncio
 
 
-class ElevenLabsEngine:
+class ElevenLabsEngine(EngineMixin):
     """ElevenLabs synthesis, mixed into :class:`agent.tts.TTS`."""
 
     def _voice_settings(self) -> dict:

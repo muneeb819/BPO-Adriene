@@ -13,8 +13,10 @@ import time
 
 from ..resample import TARGET_RATE, resample_pcm16
 
+from ._contract import EngineMixin
 
-class LocalHttpEngine:
+
+class LocalHttpEngine(EngineMixin):
     """OpenAI-compatible local TTS transport, mixed into :class:`agent.tts.TTS`."""
 
     def probe_local(self, provider: str = "kokoro", timeout: float = 2.0) -> bool:
