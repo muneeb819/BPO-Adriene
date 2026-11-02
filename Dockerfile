@@ -19,6 +19,10 @@ FROM node:20-alpine AS webbuild
 WORKDIR /web
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci --no-audit --no-fund
+# index.html and vite.config.mjs are the build entry point under Vite — CRA
+# generated the bundle without them, so omitting either here fails the build.
+COPY frontend/index.html ./index.html
+COPY frontend/vite.config.mjs ./vite.config.mjs
 COPY frontend/public ./public
 COPY frontend/src ./src
 RUN npm run build
