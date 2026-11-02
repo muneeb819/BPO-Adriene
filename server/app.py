@@ -19,7 +19,7 @@ from agent.service import build_stasis_handler
 from server import auth as _auth
 from server import call_log
 from server.context import CONFIG
-from server.pages import CAMPAIGN_MANAGER, DASHBOARD, DEBUG_CONSOLE
+from server.pages import CAMPAIGN_MANAGER, DASHBOARD, DEBUG_CONSOLE, STUDIO
 from server.routes import campaigns, debug, recordings, voice_ws, voices
 
 
@@ -203,6 +203,12 @@ def debug_console():
     return HTMLResponse(DEBUG_CONSOLE)
 
 
+
+
+@app.get("/studio", response_class=HTMLResponse)
+def studio_page():
+    """Voice Studio: design, audition and apply the bot's voice."""
+    return HTMLResponse(STUDIO)
 
 
 @app.get("/campaigns", response_class=HTMLResponse)

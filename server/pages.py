@@ -1,18 +1,83 @@
-"""The console pages served by the app.
+"""The three server-rendered console pages.
 
-These are the three single-file HTML/JS dashboards the backend returns from
-``/``, ``/debug`` and ``/campaigns``. They live here rather than inline in
-server/app.py because they are ~1200 lines of markup and script that have
-nothing to do with routing: mixing them into the module made the route
-definitions hard to find and every read of app.py cost a thousand lines of
-scroll.
+Each page is an HTML document with its behaviour inline: no build step, no
+second request, so it renders behind the basic-auth middleware, inside the
+packaged build, and in a sandboxed preview iframe alike.
 
-Editing these is a frontend change. The React console under frontend/ is the
-built UI; these pages are the zero-build fallbacks that ship with the server.
+Layout, colour and typography come from server/theme.py. The page bodies below
+predate that theme and carry inline styles from when each page looked after
+itself, so `_page()` normalises them on the way in: decorative declarations
+(background, border, colour, padding) are dropped so the design system applies,
+while functional ones (display, flex, gap, size, visibility) are kept because
+the JavaScript depends on them. Semantic colours are mapped rather than dropped,
+so an error stays red and a success stays green.
+
+That adapter is transitional scaffolding, and the honest way to remove it is to
+rewrite the bodies by hand — recorded in docs/CODE_QUALITY.md rather than left
+for someone to discover.
 """
 from __future__ import annotations
 
-DASHBOARD = """
+import re
+
+from server.theme import shell
+
+# Declarations that fight the design system: they pin the old palette.
+_DECORATIVE = (
+    "background", "background-color", "background-image",
+    "border", "border-color", "border-radius", "border-width", "border-style",
+    "color", "box-shadow", "font-size", "font-weight", "font-family",
+    "text-shadow", "padding", "padding-left", "padding-right", "padding-top",
+    "padding-bottom", "text-decoration",
+)
+
+#: Old flat colours that carry meaning, folded onto the theme's tokens.
+_SEMANTIC = {
+    "#b02a37": "var(--red)", "#dc2626": "var(--red)", "#991b1b": "var(--red)",
+    "#e11d48": "var(--red)", "#b91c1c": "var(--red)",
+    "#16a34a": "var(--green)", "#15803d": "var(--green)", "#166534": "var(--green)",
+    "#8a6d00": "var(--amber)", "#fbbf24": "var(--amber)", "#b45309": "var(--amber)",
+    "#0e7490": "var(--cyan)", "#0369a1": "var(--cyan)",
+    "#64748b": "var(--ink-3)", "#94a3b8": "var(--ink-2)", "#475569": "var(--ink-2)",
+    "#334155": "var(--stroke)", "#1e293b": "var(--panel)",
+}
+
+
+def _clean_style(match: "re.Match[str]") -> str:
+    decls = []
+    for raw in match.group(1).split(";"):
+        if ":" not in raw:
+            continue
+        prop, _, value = raw.partition(":")
+        prop, value = prop.strip().lower(), value.strip()
+        if not value:
+            continue
+        if prop in _DECORATIVE:
+            if prop == "color":
+                mapped = _SEMANTIC.get(value.lower())
+                if mapped:                      # keep the meaning, drop the hex
+                    decls.append(f"color:{mapped}")
+            continue
+        decls.append(f"{prop}:{value}")
+    return f'style="{";".join(decls)}"' if decls else ""
+
+
+def _page(raw: str, title: str, active: str, hero_title: str, hero_sub: str) -> str:
+    """Strip a legacy page's own head/nav/styling and hand it to the theme."""
+    body = raw.split("<body>", 1)[1].rsplit("</body>", 1)[0]
+    # The old title block and the old nav strip are the shell's job now.
+    body = re.sub(r"^\s*<h1>.*?</h1>", "", body, count=1, flags=re.S)
+    body = re.sub(r"^\s*<h2>.*?</h2>", "", body, count=1, flags=re.S)
+    body = re.sub(r"^\s*<header>.*?</header>", "", body, count=1, flags=re.S)
+    body = re.sub(r'<div class="nav">.*?</div>', "", body, count=1, flags=re.S)
+    body = re.sub(r'style="([^"]*)"', _clean_style, body)
+    hero = (
+        f'<section class="hero"><h1>{hero_title}</h1><p>{hero_sub}</p></section>'
+    )
+    return shell(title, active, hero + body)
+
+
+_DASHBOARD_RAW = """
 <!doctype html><html><head><meta charset="utf-8"><title>AI Voice Agent</title>
 <style>body{font-family:system-ui;margin:2rem;background:#0f172a;color:#e2e8f0}
 h1{color:#38bdf8}h2{color:#94a3b8;font-size:.9rem;font-weight:normal;margin-top:.2rem}
@@ -734,7 +799,7 @@ load();setInterval(load,4000);</script></body></html>
 """
 
 
-DEBUG_CONSOLE = """
+_DEBUG_CONSOLE_RAW = """
 <!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Live Voice Call — talk to Lina</title>
 <style>
@@ -990,7 +1055,7 @@ fetch('/api/debug/voice').then(r=>r.json()).then(v=>{
 """
 
 
-CAMPAIGN_MANAGER = """
+_CAMPAIGN_MANAGER_RAW = """
 <!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Campaigns — build & deploy</title>
 <style>
@@ -1233,3 +1298,195 @@ async function resetAll(){ if(!confirm('Reset every campaign to its default scri
 loadAll();
 </script></body></html>
 """
+
+
+# --------------------------------------------------------------------------- #
+# Themed pages
+# --------------------------------------------------------------------------- #
+
+DASHBOARD = _page(
+    _DASHBOARD_RAW,
+    title="Adriene — Dashboard",
+    active="dashboard",
+    hero_title="Call operations",
+    hero_sub="Live qualification log, recordings and the voice library in one place. "
+             "Every call is scored, transcribed and saved automatically.",
+)
+
+DEBUG_CONSOLE = _page(
+    _DEBUG_CONSOLE_RAW,
+    title="Adriene — Live Voice",
+    active="debug",
+    hero_title="Talk to Lina",
+    hero_sub="A real call, no PBX. Type or speak and the bot answers in a live neural voice — "
+             "interrupt it any time; barge-in is a supported path, not a demo trick.",
+)
+
+CAMPAIGN_MANAGER = _page(
+    _CAMPAIGN_MANAGER_RAW,
+    title="Adriene — Campaigns",
+    active="campaigns",
+    hero_title="Campaigns",
+    hero_sub="Questions, compliance lines and dispositions per campaign. "
+             "Edits apply to the next call, not the one in progress.",
+)
+
+
+# --------------------------------------------------------------------------- #
+# Voice Studio
+# --------------------------------------------------------------------------- #
+
+_STUDIO_BODY = """
+<section class="hero">
+  <h1>Voice Studio</h1>
+  <p>Design, audition and apply the voice the bot speaks with. Every profile keeps
+     its engine, model and tuning; <b>Use</b> makes it live on the next reply.</p>
+</section>
+
+<div class="stats" id="studioStats">
+  <div class="stat"><div class="label">Saved voices</div><div class="val grad" id="stCount">—</div></div>
+  <div class="stat"><div class="label">Active voice</div><div class="val mono" id="stActive">—</div></div>
+  <div class="stat"><div class="label">Resident models</div><div class="val" id="stModels">—</div></div>
+  <div class="stat"><div class="label">Engines</div><div class="val" id="stEngines">—</div></div>
+</div>
+
+<section class="section">
+  <div class="section-head">
+    <h2>Library</h2>
+    <div class="spacer"></div>
+    <button class="ghost" onclick="loadVoices()">&#8635; Refresh</button>
+  </div>
+  <div class="grid-2" id="library"><div class="panel"><div class="skel" style="width:60%"></div></div></div>
+</section>
+
+<section class="section">
+  <div class="section-head"><h2>Design a new voice</h2></div>
+  <div class="panel">
+    <div class="row" style="margin-bottom:.9rem">
+      <label for="dname" style="min-width:96px">Name</label>
+      <input id="dname" type="text" placeholder="Warm advisor" style="flex:1;min-width:200px;width:auto">
+      <label for="dlang" style="min-width:auto">Language</label>
+      <select id="dlang" style="width:auto"><option value="en">en</option><option value="en-GB">en-GB</option><option value="es">es</option><option value="fr">fr</option></select>
+    </div>
+    <div class="row" style="margin-bottom:.9rem">
+      <label for="dvoice" style="min-width:96px">Model</label>
+      <select id="dvoice" style="flex:1;min-width:220px;width:auto"><option value="">engine default</option></select>
+      <span class="muted" id="dvoiceHint"></span>
+    </div>
+    <div class="row">
+      <button class="primary" onclick="createVoice()">&#10024; Create voice</button>
+      <span class="muted" id="dmsg"></span>
+    </div>
+  </div>
+</section>
+"""
+
+_STUDIO_SCRIPT = """
+<script>
+const $ = (id) => document.getElementById(id);
+let DESIGNER = null;
+
+function esc(s){ return String(s == null ? '' : s).replace(/[&<>"']/g,
+  (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+async function loadVoices(){
+  const lib = $('library');
+  try{
+    const r = await fetch('/api/voices');
+    const j = await r.json();
+    DESIGNER = j.designer || {};
+    const voices = j.voices || [];
+    $('stCount').textContent = voices.length;
+    $('stActive').textContent = j.active_id || 'none';
+    $('stModels').textContent = (DESIGNER.neural_voices || []).length;
+    $('stEngines').textContent = (DESIGNER.engines || []).length;
+    fillModels();
+
+    if(!voices.length){
+      lib.innerHTML = '<div class="panel"><p class="muted" style="margin:0">No saved voices yet. '
+        + 'Design one below — a profile with the neural engine needs no key and no upload.</p></div>';
+      return;
+    }
+    lib.innerHTML = voices.map(v => {
+      const active = v.id === j.active_id;
+      return `<article class="panel" style="display:flex;flex-direction:column;gap:.7rem">
+        <div class="row" style="justify-content:space-between">
+          <b style="font-size:1rem">${esc(v.name || v.id)}</b>
+          <span class="pill ${active ? 'ok' : ''}">${active ? 'ACTIVE' : esc(v.engine || '')}</span>
+        </div>
+        <div class="muted mono">${esc(v.id)} · ${esc(v.language || '')} · ${esc(v.voice || 'auto')}</div>
+        <div class="wave" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+        <div class="row">
+          <button class="primary" ${active ? 'disabled' : ''}
+                  onclick="applyVoice('${esc(v.id)}')">${active ? 'In use' : 'Use'}</button>
+          <button onclick="previewVoice('${esc(v.id)}')">&#9654; Preview</button>
+        </div>
+      </article>`;
+    }).join('');
+  }catch(e){
+    lib.innerHTML = '<div class="panel"><p class="muted" style="margin:0">Could not load the library: '
+      + esc(e.message) + '</p></div>';
+  }
+}
+
+function fillModels(){
+  const sel = $('dvoice');
+  if(!sel || !DESIGNER) return;
+  const list = DESIGNER.neural_voices || [];
+  // neural_voices is a list of objects ({id, name, language, kind}), not
+  // names — map through .id for the value and .name for the label.
+  sel.innerHTML = '<option value="">engine default</option>' +
+    list.map(v => {
+      const id = typeof v === 'string' ? v : (v.id || '');
+      const label = typeof v === 'string' ? v : (v.name || v.id || '');
+      return `<option value="${esc(id)}">${esc(label)}</option>`;
+    }).join('');
+  $('dvoiceHint').textContent = list.length
+    ? list.length + ' resident model(s)'
+    : 'no neural models installed — run scripts/fetch_neural_voices.py';
+}
+
+async function createVoice(){
+  const name = ($('dname').value || '').trim() || 'Untitled voice';
+  const voice = $('dvoice').value || '';
+  const language = $('dlang').value || 'en';
+  const engine = voice ? 'piper' : 'chatterbox';
+  $('dmsg').textContent = 'creating…';
+  try{
+    const r = await fetch('/api/voices/design', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({name, engine, language, voice}),
+    });
+    const j = await r.json();
+    if(!r.ok || j.error){ $('dmsg').textContent = j.error || 'failed'; return; }
+    $('dmsg').textContent = 'created ' + (j.voice && j.voice.id ? j.voice.id : '');
+    $('dname').value = '';
+    loadVoices();
+  }catch(e){ $('dmsg').textContent = 'failed: ' + e.message; }
+}
+
+async function applyVoice(id){
+  const r = await fetch('/api/voices/' + encodeURIComponent(id) + '/apply', {method:'POST'});
+  if(r.ok) loadVoices();
+}
+
+async function previewVoice(id){
+  const r = await fetch('/api/voices/' + encodeURIComponent(id) + '/preview', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({text:'This is how I sound.'}),
+  });
+  if(!r.ok) return;
+  const blob = await r.blob();
+  const audio = new Audio(URL.createObjectURL(blob));
+  audio.play().catch(()=>{});
+}
+
+loadVoices();
+</script>
+"""
+
+STUDIO = shell(
+    "Adriene — Voice Studio",
+    "studio",
+    _STUDIO_BODY + _STUDIO_SCRIPT,
+)
