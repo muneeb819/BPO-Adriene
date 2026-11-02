@@ -45,6 +45,23 @@ def test_crypto_round_trips_without_a_secret_key(monkeypatch):
     assert crypto.decrypt_text(token) == "hello"
 
 
+def test_empty_database_url_falls_back_to_sqlite(monkeypatch):
+    """A blank DATABASE_URL from .env must not crash the app at import.
+
+    .env.example documents DATABASE_URL as optional and ships it empty, so
+    load_dotenv() puts "" in the environment. os.getenv(name, default) returns
+    that "", and SQLAlchemy raises "Could not parse SQLAlchemy URL" — exactly
+    what a fresh clone hit the first time anything imported db.py.
+    """
+    monkeypatch.setenv("DATABASE_URL", "")
+    import sys
+
+    for name in [m for m in sys.modules if m == "backend.app.db" or m.startswith("backend.app.db.")]:
+        del sys.modules[name]
+    db = importlib.import_module("backend.app.db")
+    assert db.DATABASE_URL == "sqlite:///./dev.db"
+
+
 def test_secret_key_has_no_shipped_default():
     """backend/app/db.py and crypto.py used to fall back to 'changeme'."""
     from pathlib import Path
