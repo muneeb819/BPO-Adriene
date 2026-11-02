@@ -30,3 +30,7 @@ class LibraryMixin:
     _store_reference: Any
     _add: Any
     _meta: Any
+    ref_path: Any
+    find: Any
+    get: Any
+    active_id: Any
