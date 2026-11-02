@@ -139,6 +139,13 @@ jobs:
         env:
           CI: "false"
 
+      # The reason react-scripts was replaced: 73 advisories nobody was
+      # watching. Fail on high/critical only — Dependabot reports the rest, and
+      # a gate that goes red for a low advisory in a transitive dev dependency
+      # is a gate people learn to ignore.
+      - name: Audit dependencies (high and critical fail the build)
+        run: npm audit --audit-level=high
+
   # A clone with nothing configured must still install and pass. This is the job
   # that would have caught the suite not being runnable at all.
   fresh-clone:
