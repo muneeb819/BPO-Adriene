@@ -26,7 +26,7 @@ pytest==9.2.0
 
 # Windows-only; the QA runner uses it for per-turn audio. Not installed
 # elsewhere, so it is not pinned to a version.
-pyttsx3>=2.90 ; sys_platform == 'win32'
+pyttsx3>=2.99 ; sys_platform == 'win32'
 
 # Local neural TTS (Kokoro-82M, 20 US-English voices).
 kokoro==0.9.4
