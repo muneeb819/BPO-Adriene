@@ -98,8 +98,18 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements-dev.txt
 
+      # Fail here, clearly, if the environment is missing a package the app
+      # imports — otherwise it surfaces as a confusing test failure further down.
+      - name: Verify the app imports with this dependency set
+        run: |
+          python -c "import sqlmodel, cryptography, fastapi, pytest; print('core deps present')"
+          python -c "import backend.app.db; print('backend.app.db imports')"
+
+      # No --maxfail: a red build must report every failure. With --maxfail=1 a
+      # single early failure hides the remaining ~450 tests, so a run reading
+      # "1 failed, 41 passed, 3 skipped" says nothing about the rest of the suite.
       - name: Run the test suite
-        run: pytest tests/ backend/tests/ -v --maxfail=1
+        run: pytest tests/ backend/tests/ -v
 
   # A clone with nothing configured must still install and pass. This is the job
   # that would have caught the suite not being runnable at all.
