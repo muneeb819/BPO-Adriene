@@ -1,256 +1,55 @@
-"""Voice library: named, reusable voices for the bot (library/design/remix).
+"""Making voices: upload, design, describe, remix, match, apply.
 
-One "voice" is a profile — engine + model + language + optional clone reference
-+ tuning — that can be previewed, applied to the live bot, renamed, blended with
-another voice or deleted, all from the dashboard.
+Everything that turns audio or a description into a stored profile, and
+everything that puts a stored profile into effect. Kept apart from store.py so
+that "how a voice is produced" and "where a voice is kept" can be read — and
+changed — independently.
 
-Storage layout (kept out of git, like the other runtime data):
-
-    data/voices/library.json      metadata for every profile + the active id
-    data/voices/<voice-id>.wav    the mono 24 kHz clone reference (when it has one)
-
-Everything is validated on the way in: the reference is decoded, trimmed of
-silence, capped to `MAX_REFERENCE_SECONDS`, levelled and resampled, so a stored
-voice is always usable by the engine.
+The engine work (ChatterBox, ElevenLabs, the local neural server) is imported
+inside the methods: those are optional extras, and importing them at module
+level would make the whole package depend on every engine.
 """
 from __future__ import annotations
 
-from collections.abc import Sequence
-
-from array import array
-
-import base64
-import binascii
 import copy
-import json
 import os
-import re
-import secrets
-import time
-from dataclasses import dataclass, field, replace
+from collections.abc import Sequence
+from dataclasses import replace
 
-from . import audio_dsp as dsp
-from .audio_dsp import AudioError
-
-LIBRARY_VERSION = 1
-
-#: engines a profile can target; "kokoro" covers the OpenAI-compatible local
-#: server (Kokoro, or the bundled neural Piper voices).
-#: Engines a profile can target. "kokoro" and "piper" are both served by a
-#: self-hosted OpenAI-compatible HTTP server; piper is the neural ONNX one that
-#: needs no torch and no cloud key (see agent/neural_tts.py).
-#: "elevenlabs" profiles point at a voice id on ElevenLabs — that is where a
-#: Voice Design result lives, and the reference sample we download with it makes
-#: the voice usable by the local cloner/matcher too.
-ENGINES = ("chatterbox", "kokoro", "piper", "elevenlabs")
-REMIX_MODES = ("blend", "stitch")
-TUNING_KEYS = ("exaggeration", "cfg_weight", "temperature", "speed", "pitch",
-               "volume")
-MAX_UPLOAD_BYTES = 25 * 1024 * 1024
+from .. import audio_dsp as dsp
+from ..audio_dsp import AudioError
+from . import models
+from ._contract import LibraryMixin
+from .models import (
+    ENGINES,
+    REMIX_MODES,
+    VoiceProfile,
+    _default_piper_voice,
+    _now,
+    _samples,
+    clean_tags,
+    clean_tuning,
+    validate_engine_language,
+)
 
 
-def validate_engine_language(engine: str, model: str, language: str) -> None:
-    """Mirror the /api/tts/switch-voice rules so a saved voice cannot be invalid."""
-    if (engine or "").lower() != "chatterbox" or not language or language == "en":
-        return
-    from .tts import CHATTERBOX_LANGUAGES
-
-    if model != "multilingual":
-        raise AudioError(
-            f"the '{model or 'turbo'}' ChatterBox model is English-only — use "
-            f"'multilingual' to speak {language}")
-    if language not in CHATTERBOX_LANGUAGES:
-        raise AudioError(f"unknown language '{language}' — use one of: "
-                         f"{', '.join(CHATTERBOX_LANGUAGES)}")
-
-
-def _slug(name: str) -> str:
-    slug = re.sub(r"[^a-z0-9]+", "-", (name or "").strip().lower()).strip("-")
-    return slug[:40] or "voice"
-
-
-def _default_piper_voice() -> str:
-    """A middle-register resident voice, or the first one installed."""
-    try:
-        from . import neural_tts
-
-        models = neural_tts.describe_models()
-        if not models:
-            return ""
-        return models[len(models) // 2]["id"] if len(models) > 1 else models[0]["id"]
-    except Exception:
-        return ""
-
-
-def _now() -> str:
-    return time.strftime("%Y-%m-%dT%H:%M:%S")
-
-
-@dataclass
-class VoiceProfile:
-    """A saved voice. `ref` is relative to the library directory."""
-
-    id: str
-    name: str
-    engine: str = "chatterbox"
-    model: str = "turbo"
-    language: str = "en"
-    voice: str = ""                      # engine voice id (kokoro/piper backends)
-    ref: str = ""                        # clone reference file name, "" = built-in
-    tuning: dict = field(default_factory=dict)
-    tags: list = field(default_factory=list)
-    notes: str = ""
-    source: str = "designed"             # uploaded | recorded | imported | designed | remixed | captured
-    created: str = ""
-    last_used: str = ""
-    duration_sec: float = 0.0
-    sample_rate: int = 0
-    preview_text: str = ""
-
-    def to_dict(self) -> dict:
-        return {
-            "id": self.id, "name": self.name, "engine": self.engine,
-            "model": self.model, "language": self.language, "voice": self.voice,
-            "ref": self.ref, "has_reference": bool(self.ref),
-            "tuning": dict(self.tuning), "tags": list(self.tags),
-            "notes": self.notes, "source": self.source, "created": self.created,
-            "last_used": self.last_used, "duration_sec": self.duration_sec,
-            "sample_rate": self.sample_rate, "preview_text": self.preview_text,
-        }
-
-    @classmethod
-    def from_dict(cls, data: dict) -> "VoiceProfile":
-        known = {f for f in cls.__dataclass_fields__}
-        return cls(**{k: v for k, v in data.items() if k in known})
-
-
-class VoiceLibrary:
-    """File-backed store of voice profiles."""
-
-    def __init__(self, root: str = "data/voices"):
-        self.root = root
-        self.index_path = os.path.join(root, "library.json")
-        self._data: dict | None = None
-
-    # ------------------------------------------------------------------ io
-    def _load(self) -> dict:
-        if self._data is not None:
-            return self._data
-        try:
-            with open(self.index_path, encoding="utf-8") as fh:
-                raw = json.load(fh)
-        except FileNotFoundError:
-            raw = {}
-        except json.JSONDecodeError:
-            raw = {}                     # a corrupt index must not kill the bot
-        voices = {}
-        for entry in raw.get("voices", []):
-            try:
-                profile = VoiceProfile.from_dict(entry)
-            except TypeError:
-                continue
-            voices[profile.id] = profile
-        self._data = {"version": LIBRARY_VERSION, "active_id": raw.get("active_id", ""),
-                      "voices": voices}
-        return self._data
-
-    def _save(self) -> None:
-        data = self._load()
-        os.makedirs(self.root, exist_ok=True)
-        payload = {
-            "version": LIBRARY_VERSION,
-            "active_id": data["active_id"],
-            "voices": [v.to_dict() for v in data["voices"].values()],
-        }
-        tmp = self.index_path + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as fh:
-            json.dump(payload, fh, indent=2, sort_keys=True)
-        os.replace(tmp, self.index_path)
-
-    def reload(self) -> None:
-        self._data = None
-
-    # --------------------------------------------------------------- reads
-    def list(self) -> "list[dict]":
-        data = self._load()
-        out = []
-        for profile in sorted(data["voices"].values(), key=lambda p: p.created, reverse=True):
-            item = profile.to_dict()
-            item["active"] = profile.id == data["active_id"]
-            item["ref_path"] = self.ref_path(profile.id) if profile.ref else ""
-            out.append(item)
-        return out
-
-    def active_id(self) -> str:
-        return self._load()["active_id"]
-
-    def find(self, vid: str) -> "VoiceProfile | None":
-        return self._load()["voices"].get(vid)
-
-    def get(self, vid: str) -> VoiceProfile:
-        profile = self.find(vid)
-        if profile is None:
-            raise KeyError(vid)
-        return profile
-
-    def ref_path(self, vid: str) -> str:
-        profile = self.find(vid)
-        if profile is None or not profile.ref:
-            return ""
-        return os.path.join(self.root, profile.ref)
-
-    def _new_id(self, name: str) -> str:
-        data = self._load()
-        for _ in range(20):
-            vid = f"{_slug(name)}-{secrets.token_hex(3)}"
-            if vid not in data["voices"]:
-                return vid
-        return f"voice-{secrets.token_hex(6)}"
-
-    # -------------------------------------------------------------- writes
-    def _store_reference(self, vid: str, pcm: bytes, rate: int) -> dict:
-        """Validate, normalise and persist a clone reference; returns its info."""
-        samples, info = dsp.prepare_reference(_samples(pcm), rate)
-        os.makedirs(self.root, exist_ok=True)
-        path = os.path.join(self.root, f"{vid}.wav")
-        with open(path, "wb") as fh:
-            fh.write(dsp.wav_bytes(samples, dsp.TARGET_RATE))
-        return info
-
-    def _add(self, profile: VoiceProfile) -> VoiceProfile:
-        data = self._load()
-        data["voices"][profile.id] = profile
-        self._save()
-        return profile
-
-    def _meta(self, engine: str = "chatterbox", model: str = "turbo", language: str = "en",
-              voice: str = "", tuning: dict | None = None, tags=None, notes: str = "",
-              preview_text: str = "") -> dict:
-        return {
-            "engine": (engine or "chatterbox").lower(),
-            "model": (model or "").strip(),
-            "language": (language or "en").strip().lower(),
-            "voice": (voice or "").strip(),
-            "tuning": clean_tuning(tuning),
-            "tags": clean_tags(tags),
-            "notes": (notes or "").strip(),
-            "preview_text": (preview_text or "").strip(),
-        }
+class CreationMixin(LibraryMixin):
+    """Voice creation and application, mixed into :class:`VoiceLibrary`."""
 
     def create_from_bytes(self, name: str, data: bytes, filename: str = "",
                           **meta) -> VoiceProfile:
         """Create a voice from an uploaded audio file (wav/flac/ogg/mp3/aiff)."""
-        if len(data) > MAX_UPLOAD_BYTES:
+        if len(data) > models.MAX_UPLOAD_BYTES:
             raise AudioError(
                 f"that file is {len(data) / 1048576:.1f} MB — the limit is "
-                f"{MAX_UPLOAD_BYTES // 1048576} MB (send 10-15 s of speech)")
+                f"{models.MAX_UPLOAD_BYTES // 1048576} MB (send 10-15 s of speech)")
         samples, rate = dsp.load_audio(data)
         return self._create_from_samples(name, samples, rate,
                                          source="uploaded", filename=filename, **meta)
 
     def create_from_pcm(self, name: str, pcm: bytes, sample_rate: int, **meta) -> VoiceProfile:
         """Create a voice from raw browser-recorded microphone PCM (mono s16le)."""
-        if len(pcm) > MAX_UPLOAD_BYTES:
+        if len(pcm) > models.MAX_UPLOAD_BYTES:
             raise AudioError("that recording is too long — keep it under 30 seconds")
         samples, info = dsp.prepare_reference(_samples(pcm), int(sample_rate or 0) or 16000)
         return self._create_from_samples(name, samples, dsp.TARGET_RATE,
@@ -258,7 +57,7 @@ class VoiceLibrary:
 
     def create_from_path(self, name: str, path: str, **meta) -> VoiceProfile:
         """Create a voice from a file that already lives on the server."""
-        from .tts import TTS
+        from ..tts import TTS
 
         problem = TTS.validate_voice_reference(path)
         if problem:
@@ -324,7 +123,7 @@ class VoiceLibrary:
         Explicit tuning passed in ``meta`` still wins, so the sliders can refine
         whatever the words asked for.
         """
-        from . import neural_tts
+        from .. import neural_tts
 
         description = (description or "").strip()
         if not description:
@@ -351,7 +150,7 @@ class VoiceLibrary:
 
     def _apply_match(self, profile: VoiceProfile, language: "str | None" = None) -> dict:
         """Point a profile at the local neural voice closest to its reference."""
-        from . import neural_tts
+        from .. import neural_tts
 
         ref = self.ref_path(profile.id)
         if not profile.ref or not os.path.isfile(ref):
@@ -579,7 +378,7 @@ class VoiceLibrary:
         if profile.engine == "chatterbox":
             config.tts_provider = "chatterbox"
             if profile.model:
-                from .tts import CHATTERBOX_MODELS
+                from ..tts import CHATTERBOX_MODELS
 
                 if profile.model not in CHATTERBOX_MODELS:
                     raise AudioError(
@@ -679,79 +478,3 @@ class VoiceLibrary:
 # --------------------------------------------------------------------------- #
 # validation helpers
 # --------------------------------------------------------------------------- #
-def clean_tuning(tuning: "dict | None") -> dict:
-    """Keep only known numeric settings, clamped to sane ranges."""
-    limits = {
-        "exaggeration": (0.0, 1.0), "cfg_weight": (0.0, 1.0),
-        "temperature": (0.05, 2.0), "speed": (0.5, 2.0), "pitch": (0, 99),
-        "volume": (0.2, 2.0),
-    }
-    out: dict = {}
-    for key, value in (tuning or {}).items():
-        if key not in TUNING_KEYS or value in (None, ""):
-            continue
-        try:
-            number = float(value)
-        except (TypeError, ValueError):
-            raise AudioError(f"{key} must be a number, got {value!r}") from None
-        low, high = limits[key]
-        out[key] = float(max(low, min(high, number)))
-        if key == "pitch":
-            out[key] = int(out[key])
-    return out
-
-
-def clean_tags(tags) -> list:
-    if not tags:
-        return []
-    if isinstance(tags, str):
-        tags = [t for t in re.split(r"[,\s]+", tags) if t]
-    cleaned = []
-    for tag in tags:
-        tag = str(tag).strip()
-        if not tag:
-            continue
-        if not tag.startswith("["):
-            tag = f"[{tag.strip('[]')}]"
-        if tag not in cleaned:
-            cleaned.append(tag)
-    return cleaned
-
-
-def _samples(pcm: bytes) -> "array":
-    """Raw little-endian s16le bytes -> int16 sample array."""
-    if not pcm:
-        raise AudioError("no audio data received")
-    body = pcm[: len(pcm) - (len(pcm) % 2)]
-    samples = array("h")
-    samples.frombytes(body)
-    return samples
-
-
-def decode_base64(payload: str, *, what: str = "audio") -> bytes:
-    """Decode a data-url or bare base64 string from the browser."""
-    if not payload:
-        raise AudioError(f"no {what} data received")
-    text = payload.split(",", 1)[1] if payload.startswith("data:") else payload
-    try:
-        return base64.b64decode(text, validate=False)
-    except (binascii.Error, ValueError) as e:
-        raise AudioError(f"could not decode the uploaded {what}: {e}") from e
-
-
-def get_library(root: str | None = None) -> VoiceLibrary:
-    """The process-wide library (data/voices unless configured elsewhere)."""
-    global _LIBRARY
-    if root is None:
-        try:
-            from .config import Config
-
-            root = Config.load().voice_library_dir
-        except Exception:
-            root = "data/voices"
-    if _LIBRARY is None or root != _LIBRARY.root:
-        _LIBRARY = VoiceLibrary(root)
-    return _LIBRARY
-
-
-_LIBRARY: "VoiceLibrary | None" = None
