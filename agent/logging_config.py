@@ -104,7 +104,7 @@ def configure(level: str = "", fmt: str = "", force: bool = False) -> None:
         },
         "root": {"handlers": ["stderr"], "level": level},
     })
-    configure._done = True
+    configure._done = True  # type: ignore[attr-defined]  # one-shot marker
 
 
 def get_logger(name: str = "") -> logging.Logger:

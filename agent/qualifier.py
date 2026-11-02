@@ -49,6 +49,7 @@ def extract_age(text: str) -> AgeResult:
         r"\b(\d{2,3})\s*(?:years?\s*)(?:old|of\s*age)",
     ]
 
+    age: "int | None"
     for pat in patterns:
         m = re.search(pat, low)
         if m:

@@ -177,7 +177,7 @@ class CallSession:
                 tail = self._pending_question()
             else:
                 tail = entry.follow_up or ""
-            reply = self.persona.k_answer_bridge(answer, "", follow_up=tail or None)
+            reply = self.persona.k_answer_bridge(answer, "", follow_up=tail or None)  # type: ignore[arg-type]
             return ((reply + extra).strip(), False)
 
         # ---- the script itself: absorb the answer --------------------------

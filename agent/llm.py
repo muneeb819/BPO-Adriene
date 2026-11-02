@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import re
+from typing import Any
 
 from .config import Config
 
@@ -11,7 +12,9 @@ class LLM:
     def __init__(self, config: Config):
         self.config = config
         self.provider = config.llm_provider.lower()
-        self._anthropic = None
+        # Client for the optional anthropic SDK; Any because importing its stub
+        # at module level would make the package a hard dependency.
+        self._anthropic: Any = None
 
     @staticmethod
     def _strip(text: str) -> str:
@@ -51,9 +54,10 @@ class LLM:
     def _chat_openai(self, messages, temperature, max_tokens) -> str:
         from openai import OpenAI
 
-        kwargs = {"api_key": self.config.openai_api_key}
+        kwargs: dict[str, Any] = {"api_key": self.config.openai_api_key}
         if self.config.openai_base_url:
             kwargs["base_url"] = self.config.openai_base_url
+        # base_url is only passed when configured (None is not a valid argument).
         client = OpenAI(**kwargs)
         resp = client.chat.completions.create(
             model=self.config.openai_model,
@@ -61,7 +65,7 @@ class LLM:
             temperature=temperature,
             max_tokens=max_tokens,
         )
-        return resp.choices[0].message.content.strip()
+        return (resp.choices[0].message.content or "").strip()
 
     def _chat_gemini(self, messages, temperature, max_tokens) -> str:
         """Gemini via its OpenAI-compatible endpoint (no extra dependency)."""
@@ -77,12 +81,14 @@ class LLM:
             temperature=temperature,
             max_tokens=max_tokens,
         )
-        return resp.choices[0].message.content.strip()
+        return (resp.choices[0].message.content or "").strip()
 
     def _chat_anthropic(self, messages, temperature, max_tokens) -> str:
         if self._anthropic is None:
             import anthropic
 
+            # The client type comes from an optional dependency: importing the
+            # stub at module level would make anthropic a hard requirement.
             self._anthropic = anthropic.Anthropic(api_key=self.config.anthropic_api_key)
         system = ""
         convo = []

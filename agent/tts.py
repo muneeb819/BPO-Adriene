@@ -194,7 +194,8 @@ class TTS(ElevenLabsEngine, KokoroEngine, ChatterboxEngine, LocalHttpEngine):
         cls._promoted = None
         cls._last_failover = ""
 
-    def _promote(self, provider: str) -> None:
+    def _promote(self, provider: "str | None") -> None:
+        """Remember a working standby. None clears it (both engines are down)."""
         type(self)._promoted = provider if provider in (self.primary, self.standby) else None
 
     # ---------------- public API ----------------

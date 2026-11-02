@@ -48,6 +48,8 @@ DEBUG = os.environ.get("DEBUG", "false").lower() in ("1", "true", "yes")
 # the static viewer, so http://<host>/qa_reports.html works against this server too.
 _QA_ENDPOINTS = Path(__file__).resolve().parents[1] / "backend" / "app" / "qa_endpoints.py"
 _spec = importlib.util.spec_from_file_location("qa_endpoints", _QA_ENDPOINTS)
+if _spec is None or _spec.loader is None:          # pragma: no cover - packaging error
+    raise ImportError(f"could not load the QA router from {_QA_ENDPOINTS}")
 _qa = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_qa)
 app.include_router(_qa.router)
@@ -826,7 +828,8 @@ async def voices_design_elevenlabs(request: Request):
         profile, info = el.save_locally(
             saved["voice_id"], data.get("name") or saved["name"], description,
             (data.get("text") or "").strip(), config=CONFIG, samples=_library())
-        return {"ok": True, "saved": saved, "voice": profile.to_dict(), "info": info}
+        voice: dict = profile.to_dict()  # type: ignore[attr-defined]
+        return {"ok": True, "saved": saved, "voice": voice, "info": info}
     except el.DesignUnavailable as e:
         return JSONResponse({"error": str(e), "hint": el.hint()}, status_code=400)
     except el.DesignError as e:

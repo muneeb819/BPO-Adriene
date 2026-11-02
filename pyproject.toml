@@ -52,3 +52,28 @@ ignore = [
 # Test doubles and fixtures legitimately import inside functions and rebind.
 "tests/*" = ["F401", "F841"]
 "backend/tests/*" = ["F401", "F841"]
+
+# ---------------------------------------------------------------------------
+# mypy — the type gate CI enforces
+#
+# Scope is agent/, server/ and backend/app/: the runtime code. The test
+# directories are checked by running the suite, which is a stronger statement
+# about them than a type check.
+#
+# ignore_missing_imports is on because several engines are optional extras
+# (chatterbox, kokoro, livekit, faster-whisper) that are deliberately not
+# installed in the default environment; requiring stubs for them would force
+# every optional dependency into CI.
+# ---------------------------------------------------------------------------
+[tool.mypy]
+python_version = "3.12"
+files = ["agent", "server", "backend/app"]
+ignore_missing_imports = true
+explicit_package_bases = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+no_implicit_optional = true
+show_error_codes = true
+# Untyped function bodies are not checked yet: the goal of this gate is to keep
+# annotated code honest, not to demand annotations everywhere at once.
+check_untyped_defs = false
