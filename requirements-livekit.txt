@@ -17,7 +17,7 @@ livekit-api>=1.2.2                   # room tokens / room service (REST)
 # --- zero-key speech (default stack) ----------------------------------------
 # Local speech recognition. Downloads base.en (~75 MB) on first use and caches it
 # in ~/.cache/huggingface.
-faster-whisper>=1.0
+faster-whisper>=1.2.1
 
 # Local neural voice (Piper/ONNX), the same engine as the browser console.
 # Fetch a voice once: python scripts/fetch_neural_voices.py
