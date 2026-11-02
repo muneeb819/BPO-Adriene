@@ -32,7 +32,13 @@ import urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-DEFAULT_DIR = os.path.join("data", "models", "piper")
+from agent import neural_tts as nt  # noqa: E402
+
+#: Same resolution the server uses, so fetching and serving always agree.
+#: Hardcoding "data/models/piper" here meant PIPER_MODELS_DIR moved the server
+#: but not the download, and the models landed in the repo anyway — which is
+#: how a 181 MB fetch ended up inside a workspace that only persists ~128 MB.
+DEFAULT_DIR = nt.DEFAULT_MODELS_DIR
 
 #: voice id -> sources. ``members`` maps the archive path to the local file name.
 VOICES: "dict[str, dict]" = {
@@ -176,7 +182,9 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="Fetch local neural voices for the studio")
     parser.add_argument("--voice", action="append", default=[],
                         help="only this voice (repeatable); default: all")
-    parser.add_argument("--dir", default=DEFAULT_DIR, help=f"target directory ({DEFAULT_DIR})")
+    parser.add_argument("--dir", default=_resolved_dir(),
+                        help="target directory (default: $PIPER_MODELS_DIR, "
+                             f"else {DEFAULT_DIR})")
     parser.add_argument("--force", action="store_true", help="re-download even if present")
     parser.add_argument("--list", action="store_true", help="show the voices and exit")
     args = parser.parse_args(argv)
@@ -204,3 +212,12 @@ def main(argv=None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+
+def _resolved_dir() -> str:
+    """Where a run with no --dir would write: $PIPER_MODELS_DIR, else the default.
+
+    Kept as a function so the tests can assert the two halves agree without
+    downloading anything or parsing the argparse definition.
+    """
+    return nt.models_dir()
