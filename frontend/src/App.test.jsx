@@ -20,6 +20,28 @@ describe('splitSentences', () => {
     expect(splitSentences('Well… let me check.')).toEqual(['Well…', 'let me check.']);
   });
 
+  it('keeps a decimal number inside one sentence', () => {
+    // Regression: the engine read "The balance is 1." and "5 million dollars."
+    // as two utterances, so the customer heard the figure in two halves.
+    expect(splitSentences('The balance is 1.5 million dollars.')).toEqual([
+      'The balance is 1.5 million dollars.',
+    ]);
+  });
+
+  it('handles several decimals in one reply', () => {
+    expect(splitSentences('Rate is 3.25 percent and the fee is 0.75 percent.')).toEqual([
+      'Rate is 3.25 percent and the fee is 0.75 percent.',
+    ]);
+  });
+
+  it('still ends a sentence on a full stop that follows a digit', () => {
+    // The guard must not swallow a real terminator: "due in 5. Next step."
+    expect(splitSentences('Payment is due in 5. Call us then.')).toEqual([
+      'Payment is due in 5.',
+      'Call us then.',
+    ]);
+  });
+
   it('returns a single chunk when there is no punctuation at all', () => {
     expect(splitSentences('no punctuation here')).toEqual(['no punctuation here']);
   });
@@ -33,6 +55,11 @@ describe('splitSentences', () => {
     expect(splitSentences('   ')).toEqual([]);
   });
 
+  it('does not lose or reorder any characters across the whole text', () => {
+    // Guards against a regex change quietly swallowing punctuation or words.
+    const text = 'Good morning. Your account is past due by 1.5 months. Shall I take a payment?';
+    expect(splitSentences(text).join(' ')).toBe(text);
+  });
 });
 
 /**

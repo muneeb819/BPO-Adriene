@@ -17,7 +17,14 @@ let neuralReady = false;     // flipped true once /api/tts/voices says installed
 let neuralVoices = [];       // Kokoro voice registry (name, gender, grade…)
 
 export function splitSentences(text){
-  return (text.match(/[^.!?…]+[.!?…]*/g) || [text]).map(s => s.trim()).filter(Boolean);
+  // A '.' between two digits is a decimal point, not the end of a sentence.
+  // Without this guard "1.5 million" is split into "1." and "5 million", and
+  // the engine reads them as two separate utterances.
+  const DECIMAL = '\u0000';
+  const guarded = text.replace(/(\d)\.(\d)/g, `$1${DECIMAL}$2`);
+  return (guarded.match(/[^.!?…]+[.!?…]*/g) || [guarded])
+    .map(s => s.trim().replaceAll(DECIMAL, '.'))
+    .filter(Boolean);
 }
 
 function stopNeural(){
