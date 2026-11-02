@@ -21,6 +21,7 @@ from agent.service import build_stasis_handler
 
 from server import auth as _auth
 from server import call_log
+from server.context import CONFIG
 from server.pages import CAMPAIGN_MANAGER, DASHBOARD, DEBUG_CONSOLE
 
 
@@ -40,7 +41,7 @@ configure_logging()
 log = get_logger("server")
 
 app = FastAPI(title="AI Voice Agent", lifespan=lifespan)
-CONFIG = Config.load()
+
 MODE = "turn-based"
 DEBUG = os.environ.get("DEBUG", "false").lower() in ("1", "true", "yes")
 
