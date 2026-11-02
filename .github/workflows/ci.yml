@@ -87,12 +87,14 @@ jobs:
           path: ~/.cache/pip
           key: pip-${{ matrix.python-version }}-${{ hashFiles('requirements-lock.txt') }}
 
-      # Installed from the lockfile, not the loose requirements.txt, so CI tests
-      # the exact dependency set a fresh clone reproduces.
+      # requirements-dev.txt pins via the lockfile (so the set is reproducible)
+      # and adds the backend's own dependencies. Installing the lockfile alone
+      # left sqlmodel and cryptography out, so backend/app/db.py could not be
+      # imported and backend/tests only passed because nothing imported it.
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements-lock.txt
+          pip install -r requirements-dev.txt
 
       - name: Run the test suite
         run: pytest tests/ backend/tests/ -v --maxfail=1
