@@ -40,11 +40,17 @@ way to tell which diff caused a regression.
 make lint     # ruff — must pass
 make type     # mypy — must pass
 make test     # pytest, both suites — must pass
+make test-frontend   # Vitest — must pass
 ```
+
+Or `make verify`, which runs all four plus the production build.
 
 CI runs exactly these on every push and pull request, plus a `fresh-clone` job
 that installs from the lockfile and runs them again. If it is green locally it
 will be green there.
+
+Note that `make check` is **not** this gate — it is the readiness report (keys,
+voices, audio) and needs no tests to pass.
 
 ## Dependencies
 
@@ -66,6 +72,7 @@ also must be resolved for CPython 3.12 (see the note in that file about torch).
 
 - `tests/` — the bot: brain, conversation, campaigns, TTS, voice library, API.
 - `backend/tests/` — the FastAPI app: state machine, brain, LiveKit.
+- `frontend/src/**/*.test.jsx` — the React console, run by Vitest not pytest.
 
 A bare `pytest` runs both (configuration lives in `pyproject.toml`).
 
