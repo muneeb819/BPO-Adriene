@@ -17,7 +17,7 @@ PY_BIN := $(VENV)/bin/python
 PIP := $(PY_BIN) -m pip
 
 .DEFAULT_GOAL := help
-.PHONY: help install build test lint type fmt check run lock clean env
+.PHONY: help install build test test-frontend lint type fmt verify check run lock clean env
 
 help:
 	@grep -E '^#   make' Makefile | sed 's/^#   //'
@@ -36,6 +36,13 @@ build:
 ## test: the full suite — both directories, verbose
 test:
 	@$(PY_BIN) -m pytest tests/ backend/tests/ -v
+
+## test-frontend: the console's Vitest suite
+test-frontend:
+	@cd frontend && (test -d node_modules || npm install) && npm test --silent
+
+## verify: every gate CI runs, in one command (check is the readiness report)
+verify: lint type test build test-frontend
 
 ## lint: the same gate CI enforces
 lint:

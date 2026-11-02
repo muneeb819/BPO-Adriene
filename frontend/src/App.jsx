@@ -16,8 +16,15 @@ let neuralAudio = null;      // currently playing <audio> (neural engine)
 let neuralReady = false;     // flipped true once /api/tts/voices says installed
 let neuralVoices = [];       // Kokoro voice registry (name, gender, grade…)
 
-function splitSentences(text){
-  return (text.match(/[^.!?…]+[.!?…]*/g) || [text]).map(s => s.trim()).filter(Boolean);
+export function splitSentences(text){
+  // A '.' between two digits is a decimal point, not the end of a sentence.
+  // Without this guard "1.5 million" is split into "1." and "5 million", and
+  // the engine reads them as two separate utterances.
+  const DECIMAL = '\u0000';
+  const guarded = text.replace(/(\d)\.(\d)/g, `$1${DECIMAL}$2`);
+  return (guarded.match(/[^.!?…]+[.!?…]*/g) || [guarded])
+    .map(s => s.trim().replaceAll(DECIMAL, '.'))
+    .filter(Boolean);
 }
 
 function stopNeural(){
@@ -77,7 +84,7 @@ async function speakNeural(text){
   fireBotSpeechEnd();                                  // whole reply spoken — release the turn
 }
 
-function scoreVoice(v){
+export function scoreVoice(v){
   const n = ((v.name||'') + ' ' + (v.lang||'')).toLowerCase();
   let s = 0;
   if(/natural|neural|online/.test(n)) s += 6;
@@ -89,7 +96,7 @@ function scoreVoice(v){
   return s;
 }
 
-function pickVoice(voices, saved){
+export function pickVoice(voices, saved){
   if(!voices || !voices.length) return null;
   if(saved){ const hit = voices.find(v => v.name === saved); if(hit) return hit; }
   return [...voices].sort((a,b) => scoreVoice(b) - scoreVoice(a))[0];
