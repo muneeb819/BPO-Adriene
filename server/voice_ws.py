@@ -44,6 +44,7 @@ class VoiceSession:
         self._ws = None                 # starlette WebSocket (browser)
         self._dg = None                 # Deepgram streaming socket (websockets client)
         self._speak_task: asyncio.Task | None = None
+        self._barged = False            # a barge cancelled this turn's speech
         self.speaking = False
         self.ended = False
 
@@ -233,6 +234,7 @@ class VoiceSession:
     def interrupt_speaking(self):
         """Barge-in: stop the bot mid-sentence right now."""
         if self._speak_task and not self._speak_task.done():
+            self._barged = True
             self._speak_task.cancel()
 
     # ---------------- main loop ----------------
@@ -312,12 +314,20 @@ class VoiceSession:
 
     async def _speak_guarded(self, text: str):
         """Speak, staying responsive to barge-in (which cancels this task)."""
+        self._barged = False
         self._speak_task = asyncio.create_task(self.speak(text))
         try:
             await self._speak_task
         except asyncio.CancelledError:
-            # Barge-in: the customer cut us off. Their speech is still being
-            # captured by the persistent Deepgram reader.
+            # Awaiting a task that gets cancelled raises CancelledError *here*,
+            # in the caller. Re-raising it unwound run() and dropped the whole
+            # call the moment a customer interrupted — the exact opposite of
+            # what barge-in is for. A barge means "stop talking and keep
+            # listening", so it is absorbed; a cancellation from anywhere else
+            # (server shutdown) is still propagated.
+            if self._barged:
+                self._barged = False
+                return
             raise
         except Exception:
             # Both TTS engines failed. The line was already reported to the

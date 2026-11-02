@@ -146,3 +146,16 @@ def test_audio_bytes_sent_up_the_socket_reach_the_recorder(client):
         saved = _drain_until(ws, "recording_saved")
 
     assert saved["duration_sec"] >= 0.0
+
+
+def test_barge_in_is_accepted_without_ending_the_call(client):
+    """Barge-in is a real user action; it must not tear down the session."""
+    _authenticate(client)
+
+    with client.websocket_connect("/ws/voice") as ws:
+        _drain_until(ws, "agent_say")
+        ws.send_text(json.dumps({"type": "barge"}))
+        # The session keeps its reader alive across a barge, so a normal turn
+        # afterwards must still be answered on the same socket.
+        ws.send_text(json.dumps({"type": "text", "text": "Sorry, go on."}))
+        assert _drain_until(ws, "agent_say")["text"]
