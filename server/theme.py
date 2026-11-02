@@ -319,6 +319,39 @@ a:hover{color:#bae6fd}
   background-size:400% 100%;animation:shimmer 1.4s ease-in-out infinite}
 @keyframes shimmer{0%{background-position:100% 0}100%{background-position:0 0}}
 
+
+/* ------------------------------------------------------------------ *
+ *  Campaign cards
+ *
+ *  .ccard is the class the campaign manager's renderCards() emits. It had
+ *  its own flat styling before the theme existed, so it is styled by name
+ *  here rather than by rewriting that page's JavaScript.
+ * ------------------------------------------------------------------ */
+#cards{display:grid;gap:.9rem;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));margin-top:.4rem}
+.ccard{
+  position:relative;display:flex;flex-direction:column;gap:.55rem;
+  padding:1.1rem 1.15rem;border-radius:var(--r);
+  background:var(--panel);border:1px solid var(--stroke);
+  backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);
+  box-shadow:var(--shadow);
+  transition:transform .35s var(--ease),border-color .35s var(--ease),background .35s var(--ease);
+}
+.ccard:hover{transform:translateY(-3px);border-color:var(--stroke-2);background:var(--panel-2)}
+.ccard.active{border-color:rgba(52,211,153,.42);
+  background:linear-gradient(160deg,rgba(52,211,153,.1),var(--panel) 55%)}
+.ccard.active::before{content:"";position:absolute;left:0;top:14px;bottom:14px;width:3px;
+  border-radius:0 3px 3px 0;background:linear-gradient(180deg,var(--green),#10b981)}
+.ccard h3{margin:0;font-size:1.02rem;font-weight:700;letter-spacing:-.02em;color:#fff}
+.ccard .muted{font-size:.75rem;text-transform:uppercase;letter-spacing:.09em;
+  color:var(--ink-3);font-weight:700}
+.ccard .desc{font-size:.87rem;color:var(--ink-2);line-height:1.55}
+.ccard .crow{display:flex;gap:.45rem;flex-wrap:wrap;margin-top:.35rem}
+.ccard .crow button{font-size:.78rem;padding:.45rem .85rem}
+.ccard .b-deploy{background:var(--grad);border:0;color:#04121a;font-weight:750}
+.ccard .b-danger{background:rgba(251,113,133,.14);border-color:rgba(251,113,133,.4);color:#ffb4c1}
+.ccard .badge{background:rgba(52,211,153,.14);border-color:rgba(52,211,153,.4);color:#8ff3cd;
+  align-self:flex-start}
+
 /* ------------------------------------------------------------------ *
  *  Utilities
  * ------------------------------------------------------------------ */

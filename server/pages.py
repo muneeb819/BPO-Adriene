@@ -1433,8 +1433,14 @@ function fillModels(){
   const sel = $('dvoice');
   if(!sel || !DESIGNER) return;
   const list = DESIGNER.neural_voices || [];
+  // neural_voices is a list of objects ({id, name, language, kind}), not
+  // names — map through .id for the value and .name for the label.
   sel.innerHTML = '<option value="">engine default</option>' +
-    list.map(v => `<option value="${esc(v)}">${esc(v)}</option>`).join('');
+    list.map(v => {
+      const id = typeof v === 'string' ? v : (v.id || '');
+      const label = typeof v === 'string' ? v : (v.name || v.id || '');
+      return `<option value="${esc(id)}">${esc(label)}</option>`;
+    }).join('');
   $('dvoiceHint').textContent = list.length
     ? list.length + ' resident model(s)'
     : 'no neural models installed — run scripts/fetch_neural_voices.py';
