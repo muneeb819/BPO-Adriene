@@ -92,22 +92,53 @@ would move lines around without separating responsibilities.
 `backend/app/` is where the remaining large modules are; it is untouched by
 this work.
 
+### Frontend build: CRA -> Vite
+
+`react-scripts` 5 was replaced with Vite 7. The reason was concrete rather than
+fashionable: CRA's transitive tree carried 73 advisories (14 high, 2 critical)
+that could not be bumped away, because `npm audit fix --force` breaks the build.
+
+| | before | after |
+|---|---|---|
+| `npm audit` | 73 (14 high, 2 critical) | **0** |
+| packages installed | 1,291 | **148** |
+| `npm run build` | ~7 s | **~1.2 s** |
+| bundle (gzip) | 75.24 kB | 76.21 kB |
+
+The migration is four changes, all deliberate:
+
+- `public/index.html` -> `index.html` at the frontend root, with the module
+  `<script>` tag added — Vite needs an explicit entry, CRA injected one.
+- `build.outDir` set to `build`, because `start.sh` and the backend both look
+  for `frontend/build/index.html`. Vite would default to `dist`.
+- `publicDir` stays `public`, because the backend serves `livekit.html`,
+  `qa_reports.html` and `recordings.html` from there via `FileResponse`.
+- `setupProxy.js` (CRA-only) replaced by `server.proxy` in `vite.config.mjs`,
+  still honouring `PROXY_TARGET`.
+
+Verified rather than assumed: the build output contains the public assets, the
+dev server serves `/`, `/livekit.html` and `/src/index.jsx`, and with the
+backend running, `/api/config` returns real JSON and `/ws/voice` completes a
+WebSocket handshake **through the proxy**.
+
 ## Frontend gate
 
 ```
+npm start             Vite dev server on :3000, /api and /ws proxied to :8000
 npm test              Vitest + React Testing Library, jsdom (20 tests)
-npm run build         react-scripts production build
+npm run build         Vite production build -> frontend/build
 make test-frontend    same as npm test, from the repo root
 make verify           ruff + mypy + pytest + build + frontend tests
 ```
 
 Three details that are easy to get wrong and are all load-bearing:
 
-- **`App.js` is `App.jsx`.** CRA silently accepts JSX inside `.js`; Vite does
-  not, and vitest fails to parse at the first JSX tag.
-- **`vitest.config.mjs` is `.mjs` on purpose.** `package.json` has no
-  `"type": "module"` because `setupProxy.js` is CommonJS, so a `.js` config is
-  loaded with `require()` — and `@vitejs/plugin-react` is ESM-only.
+- **`App.jsx` and `index.jsx`, not `.js`.** CRA silently accepted JSX inside
+  `.js` files; Vite does not, and both the build and vitest fail to parse at
+  the first JSX tag.
+- **`vite.config.mjs` is `.mjs` on purpose.** `package.json` has no
+  `"type": "module"`, so a `.js` config would be loaded with `require()` — and
+  `@vitejs/plugin-react` is ESM-only.
 - **`setupTests.js` defines `window.matchMedia`**, which jsdom lacks and the
   console touches on mount.
 
@@ -165,8 +196,8 @@ Stated plainly, because a quality document that only lists wins is marketing:
   decide what a customer hears. There is still **no component render test and no
   coverage of the WebSocket or `getUserMedia` paths** — that is the honest
   boundary.
-- **`react-scripts` 5 carries 13 high advisories** in its build toolchain
-  (webpack-dev-server, svgo, workbox-build, bfj, jsonpath, postcss, underscore).
-  They are build-time only — the shipped bundle is React itself — and they will
-  not clear until CRA is replaced. `npm audit fix --force` breaks the build, so
-  the fix is a migration to Vite, not a bump. Recorded rather than hidden.
+- **The frontend dependency tree is small but not audited continuously.**
+  `npm audit` is clean (0 advisories as of the Vite migration) and Dependabot
+  watches the npm ecosystem, but nothing runs `npm audit` in CI — a new advisory
+  appears without a commit, so there is no build to break. That is what
+  Dependabot alerts are for, and they are enabled.
