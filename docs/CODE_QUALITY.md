@@ -46,12 +46,20 @@ cap.
 
 ## Structure
 
-`server/app.py` and `agent/tts.py` were the two god files.
+The three god files were `server/app.py`, `agent/tts.py` and
+`agent/voice_library.py`.
 
 ```
-server/app.py          2745 -> 2705 lines
-  server/auth.py         93   password, Basic auth, cookie, ws handshake
-  server/call_log.py     43   load + crash-safe atomic save
+server/app.py          2745 -> 217 lines
+  server/context.py      16   the one shared Config
+  server/pages.py      1235   the embedded console HTML
+  server/routes/voices.py       777
+  server/routes/debug.py        249
+  server/routes/recordings.py   164
+  server/routes/campaigns.py    127
+  server/routes/voice_ws.py      96
+  server/auth.py          93   password, Basic auth, cookie, ws handshake
+  server/call_log.py      43   load + crash-safe atomic save
 
 agent/tts.py           1045 -> 444 lines
   agent/tts_engines/chatterbox.py   334
@@ -59,15 +67,30 @@ agent/tts.py           1045 -> 444 lines
   agent/tts_engines/kokoro.py       110
   agent/tts_engines/elevenlabs.py    78
   agent/tts_engines/_contract.py          what a mixin may assume
+
+agent/voice_library.py  757 -> package, largest module 480
+  agent/voice_library/creation.py   480
+  agent/voice_library/models.py     167
+  agent/voice_library/store.py      132
+  agent/voice_library/__init__.py    56
+  agent/voice_library/library.py     49
+  agent/voice_library/_contract.py   36
 ```
 
 Each extraction is its own commit and was verified by running the suite
-against that commit alone, not only against the branch tip.
+against that commit alone, not only against the branch tip. Every moved route
+was additionally requested through a `TestClient` — Starlette registers
+`include_router` calls lazily as `_IncludedRouter`, so reading `app.routes` for
+paths reports that nothing moved when it has.
 
-`server/app.py` at 2705 lines is still large. It is now mostly route
-definitions and the embedded dashboard strings rather than mixed
-responsibilities, but it is the next file worth splitting, and calling it
-"done" would be inaccurate.
+`server/pages.py` at 1235 lines is the largest file in the tree and is left
+that way deliberately: it is three HTML documents as string constants, with no
+behaviour to separate. `server/routes/voices.py` at 777 lines is also left
+alone — 17 endpoints over six helpers that only they use. Splitting either
+would move lines around without separating responsibilities.
+
+`backend/app/` is where the remaining large modules are; it is untouched by
+this work.
 
 ## Security posture
 
@@ -101,13 +124,18 @@ can find it), and a setting in the file but not the code (it misleads).
 
 Stated plainly, because a quality document that only lists wins is marketing:
 
-- **`server/app.py` is still 2705 lines.**
+- **`server/routes/voices.py` is 777 lines** and `server/pages.py` is 1235.
+  Both are explained above rather than split for the sake of the number.
 - **History is thin.** Before this work the repository was a 9-day, single
   author burst with 50 commits and no tags. It now carries focused,
   test-bearing commits and a release tag, but sustained multi-author history
   cannot be manufactured — it accumulates or it does not.
 - **`backend/requirements.txt` ranges are still loose** at the top level; the
-  lock beside it is what installs.
+  lock beside it is what installs. `tests/test_dependency_pins.py` now fails if
+  a package pinned in two files drifts to two versions, or if a lockfile stops
+  covering what its `requirements.txt` asks for.
+- **Dependabot alerts are disabled** on the repository, so the dependency PRs
+  are version bumps, not security fixes.
 - **No end-to-end test of the voice path** against a real microphone or a real
   PBX. The suite exercises the adapters and the API, not audio hardware.
 - **Frontend has no automated tests.** The React console is built in CI
