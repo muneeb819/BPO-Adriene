@@ -204,7 +204,7 @@ def test_upload_with_a_data_url_is_accepted(lib):
 
 
 def test_oversized_upload_is_rejected(lib, monkeypatch):
-    monkeypatch.setattr("agent.voice_library.MAX_UPLOAD_BYTES", 100)
+    monkeypatch.setattr("agent.voice_library.models.MAX_UPLOAD_BYTES", 100)
     with pytest.raises(AudioError, match="MB — the limit is"):
         lib.create_from_bytes("big", tone_wav(3.0), "big.wav")
 
