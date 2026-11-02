@@ -345,7 +345,10 @@ function ConfigPanel(){
   const [cfg, setCfg] = useState(null);
   const [saved, setSaved] = useState(false);
   const load = () => fetch('/api/config').then(r=>r.json()).then(setCfg).catch(()=>{});
-  useEffect(load, []);
+  // Note the braces: `useEffect(load, [])` hands React whatever `load` returns
+  // — a Promise — and React then calls it as the cleanup function on unmount,
+  // throwing "destroy is not a function".
+  useEffect(() => { load(); }, []);
   function update(){
     fetch('/api/config', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(cfg)})
       .then(r=>r.json())
@@ -412,7 +415,10 @@ function ConfigPanel(){
 function BrainPanel(){
   const [status, setStatus] = useState(null);
   const load = () => fetch('/api/brain/status').then(r=>r.json()).then(setStatus).catch(()=>{});
-  useEffect(load, []);
+  // Note the braces: `useEffect(load, [])` hands React whatever `load` returns
+  // — a Promise — and React then calls it as the cleanup function on unmount,
+  // throwing "destroy is not a function".
+  useEffect(() => { load(); }, []);
   if(!status) return null;
   const m = status.memory || {};
   return (

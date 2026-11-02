@@ -189,13 +189,19 @@ Stated plainly, because a quality document that only lists wins is marketing:
   lock beside it is what installs. `tests/test_dependency_pins.py` now fails if
   a package pinned in two files drifts to two versions, or if a lockfile stops
   covering what its `requirements.txt` asks for.
-- **No end-to-end test of the voice path** against a real microphone or a real
-  PBX. The suite exercises the adapters and the API, not audio hardware.
-- **Frontend coverage is thin, not absent.** Vitest + React Testing Library now
-  run in CI (`make test-frontend`, 20 tests) over the three pure functions that
-  decide what a customer hears. There is still **no component render test and no
-  coverage of the WebSocket or `getUserMedia` paths** — that is the honest
-  boundary.
+- **The end-to-end test is of the control plane, not the acoustics.**
+  `tests/test_call_flow_e2e.py` drives a whole call through the real
+  `/ws/voice` socket — greeting, turn-taking, compliance stop, disposition,
+  recording, call log — with typed utterances standing in for the microphone.
+  What that does **not** cover: Deepgram transcription accuracy, TTS audio
+  quality, and a real PBX/SIP leg. Those need hardware and a key, and no amount
+  of test scaffolding substitutes for them.
+- **Frontend coverage is real but not complete.** 28 Vitest tests run in CI:
+  20 over the pure functions that decide what a customer hears, and 8 rendering
+  the console against a stubbed `fetch` and a fake `WebSocket` — start call,
+  send utterance, receive `bot_reply`/`transfer`/`error`. Still uncovered: the
+  `getUserMedia`/Dictation path, which needs a real browser and microphone
+  permission, and the browser `speechSynthesis` fallback's audio output.
 - **The frontend dependency tree is small but not audited continuously.**
   `npm audit` is clean (0 advisories as of the Vite migration) and Dependabot
   watches the npm ecosystem, but nothing runs `npm audit` in CI — a new advisory
