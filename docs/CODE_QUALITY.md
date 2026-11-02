@@ -92,6 +92,30 @@ would move lines around without separating responsibilities.
 `backend/app/` is where the remaining large modules are; it is untouched by
 this work.
 
+## Frontend gate
+
+```
+npm test              Vitest + React Testing Library, jsdom (20 tests)
+npm run build         react-scripts production build
+make test-frontend    same as npm test, from the repo root
+make verify           ruff + mypy + pytest + build + frontend tests
+```
+
+Three details that are easy to get wrong and are all load-bearing:
+
+- **`App.js` is `App.jsx`.** CRA silently accepts JSX inside `.js`; Vite does
+  not, and vitest fails to parse at the first JSX tag.
+- **`vitest.config.mjs` is `.mjs` on purpose.** `package.json` has no
+  `"type": "module"` because `setupProxy.js` is CommonJS, so a `.js` config is
+  loaded with `require()` — and `@vitejs/plugin-react` is ESM-only.
+- **`setupTests.js` defines `window.matchMedia`**, which jsdom lacks and the
+  console touches on mount.
+
+Writing those tests found a real defect: `splitSentences` split on every full
+stop, so "The balance is 1.5 million dollars." was spoken as "The balance is
+one." then "five million dollars." — the figure halved, with a sentence pause in
+the middle. It was invisible to the build and to all 462 backend tests.
+
 ## Security posture
 
 | check | command | result |
@@ -134,9 +158,15 @@ Stated plainly, because a quality document that only lists wins is marketing:
   lock beside it is what installs. `tests/test_dependency_pins.py` now fails if
   a package pinned in two files drifts to two versions, or if a lockfile stops
   covering what its `requirements.txt` asks for.
-- **Dependabot alerts are disabled** on the repository, so the dependency PRs
-  are version bumps, not security fixes.
 - **No end-to-end test of the voice path** against a real microphone or a real
   PBX. The suite exercises the adapters and the API, not audio hardware.
-- **Frontend has no automated tests.** The React console is built in CI
-  (`make build` runs from the Dockerfile), but nothing asserts its behaviour.
+- **Frontend coverage is thin, not absent.** Vitest + React Testing Library now
+  run in CI (`make test-frontend`, 20 tests) over the three pure functions that
+  decide what a customer hears. There is still **no component render test and no
+  coverage of the WebSocket or `getUserMedia` paths** — that is the honest
+  boundary.
+- **`react-scripts` 5 carries 13 high advisories** in its build toolchain
+  (webpack-dev-server, svgo, workbox-build, bfj, jsonpath, postcss, underscore).
+  They are build-time only — the shipped bundle is React itself — and they will
+  not clear until CRA is replaced. `npm audit fix --force` breaks the build, so
+  the fix is a migration to Vite, not a bump. Recorded rather than hidden.
