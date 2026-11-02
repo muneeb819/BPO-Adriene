@@ -100,7 +100,9 @@ def run_session(channel: CallChannel, config: Config, max_turns: int = 10) -> di
             raise RuntimeError("LLM not available")
     except Exception:
         from .mock_llm import MockLLM
-        llm = MockLLM(config)
+
+        # MockLLM implements the same chat/chat_json/models_available surface.
+        llm = MockLLM(config)  # type: ignore[assignment]
     convo = Conversation(config, llm)
     channel.say(convo.start())
     turns = 0

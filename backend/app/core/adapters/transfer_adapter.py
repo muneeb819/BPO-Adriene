@@ -8,13 +8,13 @@ import os
 TRANSFER_PROVIDER = os.getenv('TRANSFER_PROVIDER', 'mock')
 
 class TransferAdapter:
-    def transfer_call(self, session_id: str, target: str = None) -> bool:
+    def transfer_call(self, session_id: str, target: "str | None" = None) -> bool:
         """Perform transfer of the given session to the specified target (queue/agent).
         Return True on success, False otherwise."""
         raise NotImplementedError
 
 class MockTransferAdapter(TransferAdapter):
-    def transfer_call(self, session_id: str, target: str = None) -> bool:
+    def transfer_call(self, session_id: str, target: "str | None" = None) -> bool:
         print(f"[MockTransfer] transfer_call called for session {session_id} target={target}")
         return True
 
@@ -33,7 +33,7 @@ class ViciDialTransferAdapter(TransferAdapter):
                 self.enabled = False
         else:
             self.enabled = False
-    def transfer_call(self, session_id: str, target: str = None) -> bool:
+    def transfer_call(self, session_id: str, target: "str | None" = None) -> bool:
         # Real implementation would call ViciDial API or instruct SIP server to warm transfer
         if not getattr(self, 'enabled', False):
             print('[ViciDial] adapter not configured; transfer skipped')
@@ -53,7 +53,7 @@ class TwilioSipTransferAdapter(TransferAdapter):
                 self.enabled = False
         else:
             self.enabled = False
-    def transfer_call(self, session_id: str, target: str = None) -> bool:
+    def transfer_call(self, session_id: str, target: "str | None" = None) -> bool:
         # Real implementation would instruct Twilio or SIP to perform warm transfer
         if not getattr(self, 'enabled', False):
             print('[TwilioSIP] adapter not configured; transfer skipped')

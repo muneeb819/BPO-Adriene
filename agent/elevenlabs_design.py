@@ -16,6 +16,8 @@ a friendly 400 rather than a 500. Nothing else in the studio depends on it.
 """
 from __future__ import annotations
 
+from typing import Any
+
 import os
 
 #: Shown in the dashboard and in the 400 body when no key is configured.
@@ -114,7 +116,7 @@ def design(description: str, text: str = "", *, config=None, loudness: float = 0
         raise DesignError(f"keep the description under {MAX_DESCRIPTION_CHARS} characters "
                           f"(it is {len(description)})")
     client = _client(config)
-    payload = {"voice_description": description}
+    payload: dict[str, Any] = {"voice_description": description}
     if text:
         payload["text"] = text
     else:
@@ -206,7 +208,7 @@ def save_locally(voice_id: str, name: str, description: str, text: str, *,
         profile = lib.create_from_bytes(name, audio, filename=f"{voice_id}.mp3", **meta)
     except AudioError:
         # some browsers/keys return an unsupported container — keep the settings
-        profile = lib.design(name, **meta)          # type: ignore[arg-type]
+        profile = lib.design(name, **meta)
     return profile, {"voice_id": voice_id, "name": name, "description": description,
                      "reference": bool(profile.ref)}
 

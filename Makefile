@@ -3,6 +3,7 @@
 #   make install   create .venv and install from the lockfile
 #   make test      run both suites (tests/ and backend/tests/)
 #   make lint      ruff
+#   make type      mypy (agent, server, backend/app)
 #   make build     build the React console the backend serves
 #   make run       start the bot on :8055
 #   make check     readiness report, no server
@@ -16,7 +17,7 @@ PY_BIN := $(VENV)/bin/python
 PIP := $(PY_BIN) -m pip
 
 .DEFAULT_GOAL := help
-.PHONY: help install build test lint fmt check run lock clean env
+.PHONY: help install build test lint type fmt check run lock clean env
 
 help:
 	@grep -E '^#   make' Makefile | sed 's/^#   //'
@@ -39,6 +40,10 @@ test:
 ## lint: the same gate CI enforces
 lint:
 	@$(PY_BIN) -m ruff check .
+
+## type: static type check (the same scope CI enforces)
+type:
+	@$(PY_BIN) -m mypy
 
 ## fmt: format the tree
 fmt:

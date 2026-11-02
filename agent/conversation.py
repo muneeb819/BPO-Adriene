@@ -89,7 +89,8 @@ class Conversation:
 
     def _fmt(self, text: str) -> str:
         c = self.campaign
-        lo = hi = ""
+        lo: "int | str" = ""
+        hi: "int | str" = ""
         for q in c.questions:
             if q.kind == "age" and q.age_min and q.age_max:
                 lo, hi = q.age_min, q.age_max
@@ -337,7 +338,7 @@ class Conversation:
             "Perfect, one moment and I'll connect you with our licensed agent.")
         # Prefer the passing question's own "pass" line if it has one.
         q = self.campaign.questions[self.ctx.q_index] if self.ctx.q_index >= 0 else None
-        fallback = (q.lines.get("pass") if q and q.lines.get("pass") else handoff)
+        fallback = ((q.lines.get("pass") if q else None) or handoff)
         line = self._speak(fallback, text, qid=(q.id if q else "transfer"),
                            ask_line=(q.ask_line if q else ""), verdict="PASS",
                            kind=(q.kind if q else "yes_no"))

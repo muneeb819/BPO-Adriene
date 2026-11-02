@@ -32,7 +32,8 @@ class Persona:
     def __init__(self, seed_key: str = ""):
         # stable across a call, different across callers
         self._rng = random.Random(f"{seed_key}|adriene-v1")
-        self._used = {}  # bank -> set of indices already used (no repeats in-call)
+        # bank -> set of indices already used (no repeats in-call)
+        self._used: dict[str, set[int]] = {}
 
     # ------------------------------------------------------------------ util
     def pick(self, bank: List[str], key: str) -> str:

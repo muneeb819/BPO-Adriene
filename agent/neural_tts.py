@@ -151,7 +151,7 @@ def _kind(model_id: str) -> str:
 # --------------------------------------------------------------------------- #
 # measurement (this is what makes matching and design honest)
 # --------------------------------------------------------------------------- #
-def _as_ints(samples) -> "list[int]":
+def _as_ints(samples) -> "array":
     if isinstance(samples, array):
         return samples
     return array("h", [dsp.to_i16(s) for s in samples])

@@ -15,8 +15,8 @@ from .voice_agent import StreamingVoiceAgent
 
 try:
     import websockets
-except ImportError:
-    websockets = None
+except ImportError:                      # optional dependency
+    websockets = None  # type: ignore[assignment]
 
 
 class ARIStreamingBridge:

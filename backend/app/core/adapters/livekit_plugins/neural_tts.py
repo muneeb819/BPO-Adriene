@@ -216,7 +216,7 @@ def from_env() -> Optional[LocalNeuralTTS]:
         return None
     try:
         return LocalNeuralTTS(
-            voice=os.getenv("LIVEKIT_TTS_VOICE") or os.getenv("PIPER_VOICE", ""),
+            voice=os.getenv("LIVEKIT_TTS_VOICE") or os.getenv("PIPER_VOICE") or "",
             speed=float(os.getenv("LIVEKIT_TTS_SPEED", "1.0")),
             pitch=int(os.getenv("LIVEKIT_TTS_PITCH", "50")),
         )

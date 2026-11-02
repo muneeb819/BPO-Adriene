@@ -12,6 +12,8 @@ import shutil
 
 from ..resample import TARGET_RATE, resample_pcm16
 
+from ._contract import EngineMixin
+
 # ---------------- ChatterBox metadata (shared by engine + API) ----------------
 
 # Selectable ChatterBox engines, in dashboard order.
@@ -50,7 +52,7 @@ def _chatterbox_unavailable(exc: ImportError) -> ImportError:
 
 
 
-class ChatterboxEngine:
+class ChatterboxEngine(EngineMixin):
     """ChatterBox synthesis, mixed into :class:`agent.tts.TTS`."""
 
 # ---------------- provider: chatterbox ----------------

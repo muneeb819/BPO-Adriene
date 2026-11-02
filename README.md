@@ -52,6 +52,7 @@ make install     # python -m venv .venv && .venv/bin/pip install -r requirements
 make build       # cd frontend && npm install && npm run build
 make test        # .venv/bin/python -m pytest tests/ backend/tests/ -v
 make lint        # .venv/bin/python -m ruff check .
+make type        # .venv/bin/python -m mypy
 make check       # readiness report: keys, voices, audio (no server)
 make run         # start on http://localhost:8055
 ```
@@ -62,6 +63,7 @@ make run         # start on http://localhost:8055
 | build console | `make build` |
 | **test** | `make test` — or `pytest tests/ backend/tests/ -v` |
 | lint | `make lint` — the same gate CI runs |
+| type check | `make type` — mypy over `agent/`, `server/`, `backend/app/` |
 | readiness | `make check` |
 | run | `make run` — or `./start.sh` |
 
@@ -86,9 +88,21 @@ Dependabot opens weekly PRs for pip, the backend, npm and GitHub Actions.
 ### CI
 
 `.github/workflows/ci.yml` runs on every push to `main` and every pull request:
-`ruff` over `agent/ server/ backend/ tests/ scripts/`, then the full `pytest`
-suite from the lockfile, plus a `fresh-clone` job that runs nothing but
-`make install && make test && make lint`. A red build blocks the merge.
+
+| job | what it does |
+|---|---|
+| `ruff` | lint over `agent/ server/ backend/ tests/ scripts/` |
+| `mypy` | type check over `agent/ server/ backend/app/` |
+| `pytest` | the full suite, from the lockfile |
+| `fresh-clone` | nothing but `make install && make test && make lint && make type` |
+
+A red build blocks the merge. Current state on `main`: 450 passed, 40 skipped,
+ruff clean, mypy clean in 64 files.
+
+Contributions follow **[CONTRIBUTING.md](CONTRIBUTING.md)** — one change per
+commit with the test that pins it. **[docs/CODE_QUALITY.md](docs/CODE_QUALITY.md)**
+lists what is enforced, how to verify each claim yourself, and what is still
+outstanding.
 
 Windows: `.\start.ps1` · Linux/macOS: `./start.sh` · Tests: `./start.sh --tests`
 

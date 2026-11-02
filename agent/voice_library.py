@@ -15,6 +15,8 @@ voice is always usable by the engine.
 """
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 from array import array
 
 import base64
@@ -396,7 +398,7 @@ class VoiceLibrary:
         match = self._apply_match(profile, language=meta.get("language"))
         return profile, match
 
-    def remix(self, name: str, sources: "list[dict]", mode: str = "blend",
+    def remix(self, name: str, sources: "Sequence[dict]", mode: str = "blend",
               pitch_semitones: float = 0.0, match: bool = False,
               **meta) -> VoiceProfile:
         """Create a new voice by blending/stitching existing voices' references.

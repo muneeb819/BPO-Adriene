@@ -23,8 +23,6 @@ calls do not keep re-hitting a dead endpoint.
 from __future__ import annotations
 
 import asyncio
-import contextlib
-import threading
 import time
 
 from .config import Config
@@ -36,6 +34,9 @@ from .tts_engines.chatterbox import (  # noqa: F401
     ChatterboxEngine,
     _chatterbox_unavailable,
 )
+from .tts_engines.elevenlabs import ElevenLabsEngine
+from .tts_engines.kokoro import KokoroEngine
+from .tts_engines.local_http import LocalHttpEngine
 
 # Errors that mean "the engine is unreachable/broken", i.e. worth failing over.
 # Deliberately excludes our own bugs (ValueError, KeyError, ...) so a real
@@ -117,7 +118,7 @@ def wav_from_pcm16(pcm: bytes, sample_rate: int = TARGET_RATE, channels: int = 1
         + b"data" + struct.pack("<I", len(data)) + data
     )
 
-class TTS(ChatterboxEngine):
+class TTS(ElevenLabsEngine, KokoroEngine, ChatterboxEngine, LocalHttpEngine):
     """TTS facade with primary/standby failover."""
 
     # Class level: shared by every call session, so an outage discovered during
@@ -193,7 +194,8 @@ class TTS(ChatterboxEngine):
         cls._promoted = None
         cls._last_failover = ""
 
-    def _promote(self, provider: str) -> None:
+    def _promote(self, provider: "str | None") -> None:
+        """Remember a working standby. None clears it (both engines are down)."""
         type(self)._promoted = provider if provider in (self.primary, self.standby) else None
 
     # ---------------- public API ----------------
@@ -350,295 +352,6 @@ class TTS(ChatterboxEngine):
             "failover_reason": self.failover_reason or type(self)._last_failover,
             "engines": engines,
         }
-
-    def probe_local(self, provider: str = "kokoro", timeout: float = 2.0) -> bool:
-        """Is a self-hosted OpenAI-compatible TTS server up? Cached for /health."""
-        provider = (provider or "kokoro").lower()
-        # Keyed by URL as well as engine: the endpoint can be re-pointed at runtime
-        # (a different port, a restarted server), and a cached "up" for the old
-        # address would keep lying about the new one for the cache window.
-        url = self._local_url(provider, "/v1/audio/voices")
-        key = f"{provider}:probe:{url}"
-        cache = type(self)._health.get(key)
-        now = time.time()
-        if cache and now - cache[0] < 5.0:
-            return cache[1]
-        import requests
-
-        try:
-            r = requests.get(url, timeout=timeout)
-            ok = r.status_code == 200
-        except Exception:
-            ok = False
-        type(self)._health[key] = (now, ok)
-        return ok
-
-    def probe_kokoro(self, timeout: float = 2.0) -> bool:
-        """Backwards-compatible alias (dashboard and tests call this name)."""
-        return self.probe_local("kokoro", timeout)
-
-    # ------- providers: self-hosted OpenAI-compatible servers (kokoro/piper) -------
-
-    def _local_settings(self, provider: str) -> dict:
-        """Where a local server lives and how it wants to be spoken to."""
-        c = self.config
-        if (provider or "").lower() == "piper":
-            return {
-                "base_url": getattr(c, "piper_base_url", "http://127.0.0.1:8880"),
-                "api_key": getattr(c, "piper_api_key", "not-needed"),
-                "model": getattr(c, "piper_model", "piper"),
-                "voice": getattr(c, "piper_voice", ""),
-                "speed": float(getattr(c, "piper_speed", 1.0) or 1.0),
-                "pitch": int(getattr(c, "piper_pitch", 50)),
-                "volume": float(getattr(c, "piper_volume", 1.0) or 1.0),
-                "timeout": float(getattr(c, "piper_timeout", 30.0) or 30.0),
-                "rate": int(getattr(c, "piper_sample_rate", TARGET_RATE) or TARGET_RATE),
-            }
-        return {
-            "base_url": c.kokoro_base_url, "api_key": c.kokoro_api_key,
-            "model": c.kokoro_model, "voice": c.kokoro_voice,
-            "speed": float(c.kokoro_speed or 1.0),
-            "pitch": int(getattr(c, "kokoro_pitch", 0) or 0),
-            "volume": 1.0, "timeout": float(c.kokoro_timeout), "rate": 24000,
-        }
-
-    def _local_url(self, provider: str, path: str = "/v1/audio/speech") -> str:
-        base = str(self._local_settings(provider)["base_url"]).rstrip("/")
-        return f"{base}{path}"
-
-    def _local_payload(self, text: str, response_format: str, provider: str) -> dict:
-        if (provider or "").lower() == "kokoro":
-            return self._kokoro_payload(text, response_format)
-        s = self._local_settings("piper")
-        # pitch is the studio's 0-99 scale (50 = the voice's own pitch)
-        return {"model": s["model"], "input": text, "voice": s["voice"],
-                "response_format": response_format, "speed": s["speed"],
-                "pitch": s["pitch"], "volume": s["volume"]}
-
-    def _note_engine(self, headers) -> None:
-        """Remember the engine/model the server claims, for honest reporting.
-
-        ``kokoro`` and ``piper`` are both just "a local OpenAI-compatible server",
-        and in the default setup both names point at the same URL — so the only
-        trustworthy answer to "who actually spoke?" is the one the server sends
-        back in ``X-Voice-Engine``. Falls back to the provider nickname when a
-        server does not send it.
-        """
-        try:
-            engine = (headers.get("X-Voice-Engine") or "").strip()
-            model = (headers.get("X-Voice-Model") or "").strip()
-        except Exception:                                          # noqa: BLE001
-            return
-        if engine:
-            self.engine_reported = engine
-        if model:
-            self.model_reported = model
-
-    def _local_audio(self, text: str, response_format: str, provider: str) -> bytes:
-        if (provider or "").lower() == "kokoro":
-            return self._kokoro(text, response_format=response_format)
-        import requests
-
-        s = self._local_settings("piper")
-        r = requests.post(
-            self._local_url("piper"),
-            json=self._local_payload(text, response_format, "piper"),
-            headers={"Authorization": f"Bearer {s['api_key']}"},
-            timeout=s["timeout"],
-        )
-        r.raise_for_status()
-        self._note_engine(r.headers)
-        return r.content
-
-    def _local_pcm(self, text: str, provider: str) -> bytes:
-        if (provider or "").lower() == "kokoro":
-            return self._kokoro_pcm(text)
-        raw = self._local_audio(text, "pcm", "piper")
-        rate = self._local_settings("piper")["rate"]
-        return resample_pcm16(raw, rate, TARGET_RATE) if rate != TARGET_RATE else raw
-
-    async def _pcm_local(self, provider: str, text: str):
-        """Async PCM16@16k generator for a local server.
-
-        Kokoro streams as it synthesises; the Piper server returns the finished
-        line in one piece (it renders a sentence in ~0.3 s, faster than it takes
-        to speak it), so it is awaited in a worker thread and yielded whole.
-        """
-        if (provider or "").lower() == "kokoro":
-            async for chunk in self._pcm_kokoro(text):
-                yield chunk
-            return
-        pcm = await asyncio.to_thread(self._local_pcm, text, "piper")
-        if pcm:
-            yield pcm
-
-    def _local_stream_sync(self, text: str, provider: str):
-        if (provider or "").lower() == "kokoro":
-            yield from self._kokoro_stream_sync(text)
-            return
-        pcm = self._local_pcm(text, "piper")
-        if pcm:
-            yield pcm
-
-    # ---------------- provider: kokoro ----------------
-
-    def _kokoro_payload(self, text: str, response_format: str) -> dict:
-        payload = {
-            "model": self.config.kokoro_model,
-            "input": text,
-            "voice": self.config.kokoro_voice,
-            "response_format": response_format,
-            "speed": self.config.kokoro_speed,
-        }
-        # Voice-studio pitch control. Unknown keys are ignored by a real Kokoro
-        # server; the bundled Piper server honours it.
-        pitch = int(getattr(self.config, "kokoro_pitch", 0) or 0)
-        if pitch:
-            payload["pitch"] = pitch
-        return payload
-
-    def _kokoro_url(self) -> str:
-        return f"{self.config.kokoro_base_url.rstrip('/')}/v1/audio/speech"
-
-    def _kokoro(self, text: str, response_format: str = "wav") -> bytes:
-        import requests
-
-        r = requests.post(
-            self._kokoro_url(),
-            json=self._kokoro_payload(text, response_format),
-            headers={"Authorization": f"Bearer {self.config.kokoro_api_key}"},
-            timeout=self.config.kokoro_timeout,
-        )
-        r.raise_for_status()
-        self._note_engine(r.headers)
-        return r.content
-
-    def _kokoro_pcm(self, text: str) -> bytes:
-        raw = self._kokoro(text, response_format="pcm")
-        return resample_pcm16(raw, 24000, TARGET_RATE)
-
-    async def _pcm_kokoro(self, text: str):
-        """Stream Kokoro PCM in a worker thread, resampling 24 kHz -> 16 kHz.
-
-        The HTTP read blocks, so it runs off the event loop; chunks are handed
-        back via call_soon_threadsafe so barge-in can still cancel instantly.
-        """
-        import requests
-
-        loop = asyncio.get_running_loop()
-        out: asyncio.Queue = asyncio.Queue()
-        stop = threading.Event()
-
-        def emit(item):
-            if stop.is_set():
-                return
-            with contextlib.suppress(RuntimeError):
-                loop.call_soon_threadsafe(out.put_nowait, item)
-
-        def worker():
-            rs = PCM16Resampler(24000, TARGET_RATE)
-            try:
-                with requests.post(
-                    self._kokoro_url(),
-                    json=self._kokoro_payload(text, "pcm"),
-                    headers={"Authorization": f"Bearer {self.config.kokoro_api_key}"},
-                    stream=True,
-                    timeout=(5.0, self.config.kokoro_timeout),
-                ) as resp:
-                    resp.raise_for_status()
-                    self._note_engine(resp.headers)
-                    for chunk in resp.iter_content(chunk_size=8192):
-                        if stop.is_set():
-                            return
-                        pcm = rs.feed(chunk)
-                        if pcm:
-                            emit(pcm)
-                    tail = rs.flush()
-                    if tail:
-                        emit(tail)
-                emit(None)                     # sentinel: finished cleanly
-            except BaseException as exc:       # noqa: BLE001 - re-raised by consumer
-                emit(exc)
-
-        threading.Thread(target=worker, daemon=True, name="kokoro-tts").start()
-        try:
-            while True:
-                item = await out.get()
-                if item is None:
-                    return
-                if isinstance(item, BaseException):
-                    raise item
-                yield item
-        finally:
-            stop.set()                         # tell the worker to stop generating
-
-    # ---------------- provider: elevenlabs ----------------
-
-    def _voice_settings(self) -> dict:
-        return {
-            "stability": self.config.elevenlabs_stability,
-            "similarity_boost": self.config.elevenlabs_similarity_boost,
-            "style": self.config.elevenlabs_style,
-            "use_speaker_boost": self.config.elevenlabs_speaker_boost,
-        }
-
-    def _get_elevenlabs(self):
-        if self._elevenlabs is None:
-            from elevenlabs.client import ElevenLabs
-
-            if not self.config.elevenlabs_api_key:
-                raise ConnectionError("ELEVENLABS_API_KEY is not set")
-            self._elevenlabs = ElevenLabs(api_key=self.config.elevenlabs_api_key)
-        return self._elevenlabs
-
-    def _elevenlabs_sync(self, text: str) -> bytes:
-        from .voice_ids import resolve_voice_id
-
-        audio = self._get_elevenlabs().text_to_speech.convert(
-            voice_id=resolve_voice_id(self.config.elevenlabs_voice),
-            text=text,
-            model_id=self.config.elevenlabs_model,
-            voice_settings=self._voice_settings(),
-        )
-        if hasattr(audio, "__iter__") and not isinstance(audio, (bytes, bytearray)):
-            return b"".join(bytes(a) for a in audio)
-        return audio
-
-    def _elevenlabs_stream(self, text: str):
-        from .voice_ids import resolve_voice_id
-
-        stream = self._get_elevenlabs().text_to_speech.convert(
-            voice_id=resolve_voice_id(self.config.elevenlabs_voice),
-            text=text,
-            model_id=self.config.elevenlabs_model,
-            voice_settings=self._voice_settings(),
-        )
-        for chunk in stream:
-            if chunk:
-                yield chunk
-
-    async def _pcm_elevenlabs(self, text: str):
-        """Async: raw PCM16 @16 kHz from ElevenLabs, cancellable mid-stream."""
-        from .voice_ids import resolve_voice_id
-
-        client = self._get_elevenlabs()
-
-        def _run():
-            return client.text_to_speech.convert(
-                voice_id=resolve_voice_id(self.config.elevenlabs_voice),
-                text=text,
-                model_id=self.config.elevenlabs_model,
-                output_format="pcm_16000",
-                voice_settings=self._voice_settings(),
-            )
-
-        stream = await asyncio.to_thread(_run)
-        for chunk in stream:
-            if chunk:
-                yield bytes(chunk)
-                await asyncio.sleep(0)         # yield control so barge-in works
-
-    # ---------------- other providers ----------------
 
     def _pcm_from(self, provider: str, text: str):
         if provider == "console":

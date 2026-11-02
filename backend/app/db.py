@@ -3,7 +3,11 @@ from typing import Optional
 from datetime import datetime, timezone
 import os
 
-DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./dev.db")
+# Treat an empty value as unset: .env.example ships `DATABASE_URL=` (optional), and
+# load_dotenv() puts the empty string in os.environ, so os.getenv(name, default)
+# would return "" and SQLAlchemy raises "Could not parse SQLAlchemy URL". Same
+# rule as Config.load()'s env() helper.
+DATABASE_URL = os.getenv("DATABASE_URL") or "sqlite:///./dev.db"
 engine = create_engine(DATABASE_URL, echo=False, connect_args={"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {})
 
 SECRET_KEY = os.getenv("SECRET_KEY", "")
