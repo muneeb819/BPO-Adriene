@@ -11,7 +11,7 @@
 -r requirements.txt
 
 # --- LiveKit worker + WebRTC ------------------------------------------------
-livekit-agents[silero]>=1.8,<2     # agent framework + Silero VAD (bundled ONNX)
+livekit-agents[silero]>=1.8.11,<2     # agent framework + Silero VAD (bundled ONNX)
 livekit-api>=1.2.2                   # room tokens / room service (REST)
 
 # --- zero-key speech (default stack) ----------------------------------------
